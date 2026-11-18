@@ -103,7 +103,7 @@ interface ApiBrainConfig {
 
 interface ApiConnectionConfig {
   alert_phone: string;
-  search_provider: 'google_places' | 'serper';
+  search_provider: 'playwright' | 'google_places' | 'serper';
   search_api_key: string;
   ai_provider: 'openai' | 'gemini';
   ai_api_key: string;

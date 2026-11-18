@@ -83,11 +83,11 @@ async def get_or_create_connection_settings(db: AsyncSession) -> ConnectionSetti
     if conn is None:
         conn = ConnectionSettings(
             id=1,
-            alert_phone=settings.alert_whatsapp_phone,
-            search_provider='google_places',
-            search_api_key=settings.google_places_api_key,
-            ai_provider='openai',
-            ai_api_key=settings.openai_api_key,
+            alert_phone=settings.alert_whatsapp_phone or '5573988323477',
+            search_provider='playwright',
+            search_api_key='',
+            ai_provider='gemini',
+            ai_api_key=settings.gemini_api_key,
         )
         db.add(conn)
         await db.commit()

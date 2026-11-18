@@ -334,7 +334,7 @@ export function ConnectionsPage() {
               </div>
             </div>
 
-            {/* Provedor de Busca (Google Places / Serper) */}
+            {/* Provedor de Busca (Playwright / Google Places / Serper) */}
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
               <div className="sm:col-span-4 space-y-1.5">
                 <label className="block text-xs font-medium text-slate-300">
@@ -345,11 +345,15 @@ export function ConnectionsPage() {
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      searchProvider: e.target.value as 'google_places' | 'serper',
+                      searchProvider: e.target.value as
+                        | 'playwright'
+                        | 'google_places'
+                        | 'serper',
                     })
                   }
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-emerald-500/60"
                 >
+                  <option value="playwright">Playwright (Maps Grátis)</option>
                   <option value="google_places">Google Places API</option>
                   <option value="serper">Serper.dev (Maps)</option>
                 </select>
@@ -357,20 +361,28 @@ export function ConnectionsPage() {
 
               <div className="sm:col-span-8 space-y-1.5">
                 <label className="block text-xs font-medium text-slate-300">
-                  API Key (Google Places / Serper)
+                  {form.searchProvider === 'playwright'
+                    ? 'API Key (Dispensada no modo Playwright)'
+                    : 'API Key (Google Places / Serper)'}
                 </label>
                 <div className="relative">
                   <input
                     type={showSearchKey ? 'text' : 'password'}
                     value={form.searchApiKey}
+                    disabled={form.searchProvider === 'playwright'}
                     onChange={(e) => setForm({ ...form, searchApiKey: e.target.value })}
-                    placeholder="Cole sua chave de busca aqui..."
-                    className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-white focus:outline-none focus:border-emerald-500/60"
+                    placeholder={
+                      form.searchProvider === 'playwright'
+                        ? 'Playwright navega direto no Google Maps sem precisar de chave'
+                        : 'Cole sua chave de busca aqui...'
+                    }
+                    className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/60 disabled:opacity-60 disabled:cursor-not-allowed"
                   />
                   <button
                     type="button"
+                    disabled={form.searchProvider === 'playwright'}
                     onClick={() => setShowSearchKey((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer disabled:opacity-40"
                     aria-label="Alternar visibilidade da chave de busca"
                   >
                     {showSearchKey ? (

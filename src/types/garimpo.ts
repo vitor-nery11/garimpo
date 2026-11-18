@@ -79,7 +79,7 @@ export interface ConnectionConfig {
   whatsappQrBase64?: string | null;
   lastSyncAt: string;
   alertPhone: string;
-  searchProvider: 'google_places' | 'serper';
+  searchProvider: 'playwright' | 'google_places' | 'serper';
   searchApiKey: string;
   aiProvider: 'openai' | 'gemini';
   aiApiKey: string;

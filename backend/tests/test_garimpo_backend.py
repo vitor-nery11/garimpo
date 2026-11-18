@@ -13,7 +13,12 @@ from app.db.session import Base, get_db
 from app.main import create_app
 from app.schemas.settings import WhatsAppStatusOut
 from app.services.ai_sdr_service import AiSdrService
-from app.services.prospecting_service import classify_website, normalize_brazil_phone
+from app.services.prospecting_service import (
+    ProspectingService,
+    _extract_neighborhood_from_address,
+    classify_website,
+    normalize_brazil_phone,
+)
 from app.services.redis_service import RedisService
 from app.worker.main import process_one_dispatch, process_ready_debounces
 
@@ -85,23 +90,45 @@ def test_classify_website_variants():
 def test_normalize_brazil_phone():
     assert normalize_brazil_phone('(11) 98842-1094') == '5511988421094'
     assert normalize_brazil_phone('+55 19 99123-4478') == '5519991234478'
+    assert (
+        _extract_neighborhood_from_address(
+            'Av. Paulista, 1000 - Bela Vista, São Paulo - SP, 01310-100'
+        )
+        == 'Bela Vista'
+    )
 
 
 @pytest.mark.asyncio
-async def test_full_prospecting_dispatch_webhook_debounce_and_manual_takeover(test_env):
+async def test_full_prospecting_dispatch_webhook_debounce_and_manual_takeover(
+    test_env, monkeypatch
+):
     app = test_env['app']
     session_factory = test_env['session_factory']
     redis_service: RedisService = test_env['redis_service']
     evolution_mock = test_env['evolution_mock']
 
+    async def fake_playwright_search(self, *, city, niche, limit, existing_phones):
+        return self._fallback_candidates(
+            city=city, niche=niche, limit=limit, existing_phones=existing_phones
+        )
+
+    monkeypatch.setattr(ProspectingService, '_search_playwright', fake_playwright_search)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url='http://test') as client:
-        # 1. Health & Dashboard
+        # 1. Health & Default Connection Settings
         r_health = await client.get('/api/v1/health')
         assert r_health.status_code == 200
         assert r_health.json()['status'] == 'ok'
 
-        # 2. Prospecting search (offline demo fallback)
+        r_conn = await client.get('/api/v1/settings/connections')
+        assert r_conn.status_code == 200
+        conn_data = r_conn.json()
+        assert conn_data['search_provider'] == 'playwright'
+        assert conn_data['ai_provider'] == 'gemini'
+        assert conn_data['alert_phone'] == '5573988323477'
+
+        # 2. Prospecting search via Playwright provider
         r_search = await client.post(
             '/api/v1/prospecting/search',
             json={'city': 'São Paulo', 'niche': 'Clínica Odontológica', 'limit': 3},

@@ -1,10 +1,13 @@
+import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 
 from app.schemas.lead import SiteDiagnostic
 from app.schemas.prospecting import ProspectingCandidateOut
+
+logger = logging.getLogger('garimpo.prospecting')
 
 SOCIAL_OR_BIO_DOMAINS = (
     'instagram.com',
@@ -57,8 +60,19 @@ def normalize_brazil_phone(raw_phone: str | None) -> str:
     return digits
 
 
+def _extract_neighborhood_from_address(address: str) -> str:
+    if not address:
+        return ''
+    # Typical Brazilian Google Maps address: "Rua X, 123 - Moema, São Paulo - SP, 04000-000"
+    if ' - ' in address and ',' in address:
+        after_dash = address.split(' - ', 1)[1]
+        return after_dash.split(',', 1)[0].strip()
+    parts = [p.strip() for p in address.split(',') if p.strip()]
+    return parts[1] if len(parts) > 1 else ''
+
+
 class ProspectingService:
-    """Fetches local B2B establishments from Google Places API or Serper.dev using async HTTPX."""
+    """Fetches local B2B establishments via Playwright (Google Maps), Google Places API, or Serper.dev."""
 
     async def search(
         self,
@@ -70,8 +84,18 @@ class ProspectingService:
         api_key: str,
         existing_phones: set[str],
     ) -> list[ProspectingCandidateOut]:
+        if provider == 'playwright':
+            return await self._search_playwright(
+                city=city,
+                niche=niche,
+                limit=limit,
+                existing_phones=existing_phones,
+            )
+
         if not api_key.strip():
-            return self._fallback_candidates(city=city, niche=niche, limit=limit, existing_phones=existing_phones)
+            return self._fallback_candidates(
+                city=city, niche=niche, limit=limit, existing_phones=existing_phones
+            )
 
         if provider == 'serper':
             return await self._search_serper(
@@ -89,6 +113,144 @@ class ProspectingService:
             api_key=api_key,
             existing_phones=existing_phones,
         )
+
+    async def _search_playwright(
+        self,
+        *,
+        city: str,
+        niche: str,
+        limit: int,
+        existing_phones: set[str],
+    ) -> list[ProspectingCandidateOut]:
+        from playwright.async_api import TimeoutError as PlaywrightTimeout
+        from playwright.async_api import async_playwright
+
+        query = quote_plus(f'{niche} em {city}')
+        maps_url = f'https://www.google.com/maps/search/{query}?hl=pt-BR'
+        candidates: list[ProspectingCandidateOut] = []
+        seen_phones: set[str] = set()
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-dev-shm-usage'],
+            )
+            context = await browser.new_context(
+                locale='pt-BR',
+                viewport={'width': 1280, 'height': 900},
+            )
+            page = await context.new_page()
+
+            try:
+                await page.goto(maps_url, wait_until='domcontentloaded', timeout=30000)
+
+                # Dismiss Google consent banner if displayed
+                for btn_text in ('Aceitar tudo', 'Accept all'):
+                    btn = page.locator(f'button:has-text("{btn_text}")').first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click()
+                        break
+
+                feed = page.locator('div[role="feed"]').first
+                try:
+                    await feed.wait_for(state='visible', timeout=15000)
+                except PlaywrightTimeout:
+                    logger.warning('Feed de resultados do Google Maps não carregou para: %s', query)
+                    return []
+
+                # Scroll results list until we collect enough place links or reach end
+                place_urls: list[str] = []
+                seen_urls: set[str] = set()
+                stagnant_scrolls = 0
+
+                while len(place_urls) < limit and stagnant_scrolls < 5:
+                    anchors = await page.locator('a.hfpxzc').all()
+                    before_count = len(place_urls)
+                    for anchor in anchors:
+                        href = await anchor.get_attribute('href')
+                        if href and '/maps/place/' in href and href not in seen_urls:
+                            seen_urls.add(href)
+                            place_urls.append(href)
+                            if len(place_urls) >= limit:
+                                break
+
+                    if len(place_urls) >= limit:
+                        break
+
+                    stagnant_scrolls = stagnant_scrolls + 1 if len(place_urls) == before_count else 0
+                    await feed.evaluate('(el) => el.scrollBy(0, el.scrollHeight)')
+                    await page.wait_for_timeout(1200)
+
+                # Visit each collected place page to extract phone, website, and rating
+                for idx, place_url in enumerate(place_urls[:limit]):
+                    try:
+                        await page.goto(place_url, wait_until='domcontentloaded', timeout=20000)
+                        title_el = page.locator('h1.DUwDvf').first
+                        await title_el.wait_for(state='visible', timeout=8000)
+                        company_name = (await title_el.inner_text()).strip()
+
+                        phone_raw = ''
+                        phone_btn = page.locator('button[data-item-id^="phone:tel:"]').first
+                        if await phone_btn.count() > 0:
+                            data_id = await phone_btn.get_attribute('data-item-id') or ''
+                            phone_raw = data_id.replace('phone:tel:', '') or (
+                                await phone_btn.inner_text()
+                            )
+
+                        phone = normalize_brazil_phone(phone_raw)
+                        if not phone or phone in seen_phones:
+                            continue
+                        seen_phones.add(phone)
+
+                        website_href: str | None = None
+                        web_link = page.locator('a[data-item-id="authority"]').first
+                        if await web_link.count() > 0:
+                            website_href = await web_link.get_attribute('href')
+
+                        address_text = ''
+                        addr_btn = page.locator('button[data-item-id="address"]').first
+                        if await addr_btn.count() > 0:
+                            address_text = (await addr_btn.inner_text()).strip()
+
+                        rating: float | None = None
+                        reviews_count: int | None = None
+                        rating_box = page.locator('div.F7nice').first
+                        if await rating_box.count() > 0:
+                            rating_text = (await rating_box.inner_text()).strip()
+                            match_rating = re.search(r'(\d+[.,]\d+)', rating_text)
+                            if match_rating:
+                                rating = float(match_rating.group(1).replace(',', '.'))
+                            match_reviews = re.search(r'\((\d[\d\.]*)\)', rating_text)
+                            if match_reviews:
+                                reviews_count = int(match_reviews.group(1).replace('.', ''))
+
+                        diagnostic, website_url, ig_handle = classify_website(website_href)
+
+                        candidates.append(
+                            ProspectingCandidateOut(
+                                id=f'pw-{idx + 1}-{phone[-4:]}',
+                                company_name=company_name,
+                                niche=niche,
+                                city=city,
+                                neighborhood=_extract_neighborhood_from_address(address_text),
+                                phone=phone,
+                                website_url=website_url,
+                                instagram_handle=ig_handle,
+                                diagnostic=diagnostic,
+                                rating=rating,
+                                reviews_count=reviews_count,
+                                has_whatsapp=True,
+                                already_queued=phone in existing_phones,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.debug('Erro ao ler card %s: %s', place_url, exc)
+                        continue
+            finally:
+                await context.close()
+                await browser.close()
+
+        return candidates
 
     async def _search_google_places(
         self,

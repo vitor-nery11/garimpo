@@ -23,10 +23,10 @@ class BrainConfigSchema(BaseModel):
 
 
 class ConnectionConfigSchema(BaseModel):
-    alert_phone: str = ''
-    search_provider: Literal['google_places', 'serper'] = 'google_places'
+    alert_phone: str = '5573988323477'
+    search_provider: Literal['playwright', 'google_places', 'serper'] = 'playwright'
     search_api_key: str = ''
-    ai_provider: Literal['openai', 'gemini'] = 'openai'
+    ai_provider: Literal['openai', 'gemini'] = 'gemini'
     ai_api_key: str = ''
 
 
