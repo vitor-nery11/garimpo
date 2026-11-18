@@ -368,7 +368,9 @@ export function ProspectingPage() {
               {filteredResults.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-10 text-center text-sm text-slate-400">
-                    Nenhuma empresa encontrada com esse filtro de diagnóstico.
+                    {searchResults.length === 0
+                      ? 'Preencha Cidade/Bairro e Nicho acima e clique em "Buscar Leads" para iniciar o garimpo.'
+                      : 'Nenhuma empresa encontrada com esse filtro de diagnóstico.'}
                   </td>
                 </tr>
               )}

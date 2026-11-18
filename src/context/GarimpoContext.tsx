@@ -77,14 +77,17 @@ interface GarimpoContextValue {
 const GarimpoContext = createContext<GarimpoContextValue | null>(null);
 
 const STORAGE_KEYS = {
-  leads: 'garimpo_leads_v1',
+  leads: 'garimpo_leads_v2',
   brain: 'garimpo_brain_v1',
-  connections: 'garimpo_connections_v1',
-  stats: 'garimpo_stats_v1',
+  connections: 'garimpo_connections_v2',
+  stats: 'garimpo_stats_v2',
 };
 
 function loadFromStorage<T>(key: string, fallback: T): T {
   try {
+    // Clean up legacy seeded mock storage keys if present
+    localStorage.removeItem('garimpo_leads_v1');
+    localStorage.removeItem('garimpo_stats_v1');
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
@@ -226,10 +229,8 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
 
   const [workerRunning, setWorkerRunning] = useState<boolean>(true);
   const [apiWithinHours, setApiWithinHours] = useState<boolean | null>(null);
-  const [nextDispatchSeconds, setNextDispatchSeconds] = useState<number>(102); // 1m 42s
-  const [searchResults, setSearchResults] = useState<ProspectingCandidate[]>(() =>
-    PROSPECTING_CATALOG.slice(0, 8)
-  );
+  const [nextDispatchSeconds, setNextDispatchSeconds] = useState<number>(0);
+  const [searchResults, setSearchResults] = useState<ProspectingCandidate[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
