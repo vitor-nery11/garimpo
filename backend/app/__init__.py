@@ -1,0 +1,1 @@
+"""Garimpo backend application package."""
