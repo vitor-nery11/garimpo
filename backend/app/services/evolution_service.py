@@ -29,6 +29,12 @@ class EvolutionService:
                         state=state,
                         instance_name=self.instance,
                     )
+                if resp.status_code == 404:
+                    return WhatsAppStatusOut(
+                        connected=False,
+                        state='not_created',
+                        instance_name=self.instance,
+                    )
         except Exception:
             pass
         return WhatsAppStatusOut(
