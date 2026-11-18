@@ -1,10 +1,39 @@
+import { Layout } from './components/Layout';
+import { GarimpoProvider, useGarimpo } from './context/GarimpoContext';
+import { BrainPage } from './pages/BrainPage';
+import { ChatPage } from './pages/ChatPage';
+import { ConnectionsPage } from './pages/ConnectionsPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { KanbanPage } from './pages/KanbanPage';
+import { ProspectingPage } from './pages/ProspectingPage';
+
+function AppRouter() {
+  const { activeTab } = useGarimpo();
+
+  switch (activeTab) {
+    case 'dashboard':
+      return <DashboardPage />;
+    case 'prospeccao':
+      return <ProspectingPage />;
+    case 'kanban':
+      return <KanbanPage />;
+    case 'chat':
+      return <ChatPage />;
+    case 'cerebro':
+      return <BrainPage />;
+    case 'conexoes':
+      return <ConnectionsPage />;
+    default:
+      return <DashboardPage />;
+  }
+}
+
 export default function App() {
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
-      <div className="text-center space-y-2">
-        <h1 className="text-2xl font-bold tracking-tight">Garimpo</h1>
-        <p className="text-slate-400 text-sm">Inicializando aplicação...</p>
-      </div>
-    </div>
+    <GarimpoProvider>
+      <Layout>
+        <AppRouter />
+      </Layout>
+    </GarimpoProvider>
   );
 }
