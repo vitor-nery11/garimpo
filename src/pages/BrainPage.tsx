@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BrainCircuit,
   Clock,
@@ -20,6 +20,10 @@ export function BrainPage() {
   const [focusedTemplateId, setFocusedTemplateId] = useState<string>(
     brainConfig.templates[0]?.id ?? ''
   );
+
+  useEffect(() => {
+    setForm(brainConfig);
+  }, [brainConfig]);
 
   const insertVariable = (variable: string) => {
     const targetId = focusedTemplateId || form.templates[0]?.id;

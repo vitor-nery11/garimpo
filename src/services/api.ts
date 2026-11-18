@@ -1,29 +1,120 @@
 import type {
   BrainConfig,
+  ChatMessage,
   ConnectionConfig,
   FunnelStage,
   Lead,
+  MessageSender,
   ProspectingCandidate,
+  SiteDiagnostic,
 } from '../types/garimpo';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000/api/v1';
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 10000
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `Erro HTTP ${response.status}`);
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+      signal: controller.signal,
+      ...init,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Erro HTTP ${response.status}`);
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    window.clearTimeout(timer);
   }
+}
 
-  return (await response.json()) as T;
+// ---------------------------------------------------------------------------
+// Backend DTOs (snake_case)
+// ---------------------------------------------------------------------------
+
+interface ApiMessage {
+  id: string;
+  sender: MessageSender;
+  text: string;
+  created_at: string;
+}
+
+interface ApiLead {
+  id: string;
+  company_name: string;
+  niche: string;
+  city: string;
+  neighborhood: string;
+  phone: string;
+  website_url?: string | null;
+  instagram_handle?: string | null;
+  diagnostic: SiteDiagnostic;
+  stage: FunnelStage;
+  ai_active: boolean;
+  handoff_summary?: string | null;
+  rating?: number | null;
+  reviews_count?: number | null;
+  last_message_at?: string | null;
+  created_at: string;
+  messages: ApiMessage[];
+}
+
+interface ApiCandidate {
+  id: string;
+  company_name: string;
+  niche: string;
+  city: string;
+  neighborhood: string;
+  phone: string;
+  website_url?: string | null;
+  instagram_handle?: string | null;
+  diagnostic: SiteDiagnostic;
+  rating?: number | null;
+  reviews_count?: number | null;
+  has_whatsapp?: boolean;
+  already_queued?: boolean;
+}
+
+interface ApiBrainConfig {
+  persona_prompt: string;
+  problem_solved: string;
+  common_objections: string;
+  handoff_triggers: string;
+  templates: Array<{ id: string; label: string; content: string }>;
+  allowed_start_time: string;
+  allowed_end_time: string;
+  max_daily_messages: number;
+  min_interval_sec: number;
+  max_interval_sec: number;
+}
+
+interface ApiConnectionConfig {
+  alert_phone: string;
+  search_provider: 'google_places' | 'serper';
+  search_api_key: string;
+  ai_provider: 'openai' | 'gemini';
+  ai_api_key: string;
+}
+
+export interface ApiWhatsAppStatus {
+  connected: boolean;
+  state: string;
+  instance_name: string;
+  phone?: string | null;
+  qr_code_base64?: string | null;
 }
 
 export interface ApiDashboardResponse {
@@ -41,21 +132,157 @@ export interface ApiDashboardResponse {
     response_rate: number;
     hot_leads_count: number;
   };
-  hot_leads: unknown[];
+  hot_leads: ApiLead[];
   stage_counts: Record<string, number>;
 }
 
+// ---------------------------------------------------------------------------
+// Mappers (snake_case <-> camelCase)
+// ---------------------------------------------------------------------------
+
+function formatTimeLabel(isoDate: string): string {
+  const dt = new Date(isoDate);
+  if (Number.isNaN(dt.getTime())) return '--:--';
+  return dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function computeMinutesAgo(isoDate?: string | null): number {
+  if (!isoDate) return 0;
+  const dt = new Date(isoDate).getTime();
+  if (Number.isNaN(dt)) return 0;
+  return Math.max(0, Math.floor((Date.now() - dt) / 60000));
+}
+
+export function mapApiMessage(dto: ApiMessage): ChatMessage {
+  return {
+    id: dto.id,
+    sender: dto.sender,
+    text: dto.text,
+    timestamp: dto.created_at,
+    timeLabel: formatTimeLabel(dto.created_at),
+  };
+}
+
+export function mapApiLead(dto: ApiLead): Lead {
+  return {
+    id: dto.id,
+    companyName: dto.company_name,
+    niche: dto.niche,
+    city: dto.city,
+    neighborhood: dto.neighborhood,
+    phone: dto.phone,
+    websiteUrl: dto.website_url ?? undefined,
+    instagramHandle: dto.instagram_handle ?? undefined,
+    diagnostic: dto.diagnostic,
+    stage: dto.stage,
+    aiActive: dto.ai_active,
+    lastMessageMinutesAgo: computeMinutesAgo(dto.last_message_at),
+    handoffSummary: dto.handoff_summary ?? undefined,
+    rating: dto.rating ?? undefined,
+    reviewsCount: dto.reviews_count ?? undefined,
+    messages: (dto.messages ?? []).map(mapApiMessage),
+  };
+}
+
+export function mapApiCandidate(dto: ApiCandidate): ProspectingCandidate {
+  return {
+    id: dto.id,
+    companyName: dto.company_name,
+    niche: dto.niche,
+    city: dto.city,
+    neighborhood: dto.neighborhood,
+    phone: dto.phone,
+    websiteUrl: dto.website_url ?? undefined,
+    instagramHandle: dto.instagram_handle ?? undefined,
+    diagnostic: dto.diagnostic,
+    rating: dto.rating ?? 4.5,
+    reviewsCount: dto.reviews_count ?? 0,
+    hasWhatsapp: dto.has_whatsapp ?? true,
+    alreadyQueued: dto.already_queued ?? false,
+  };
+}
+
+export function mapApiBrainToUi(dto: ApiBrainConfig): BrainConfig {
+  return {
+    personaPrompt: dto.persona_prompt,
+    problemSolved: dto.problem_solved,
+    commonObjections: dto.common_objections,
+    handoffTriggers: dto.handoff_triggers,
+    templates: dto.templates,
+    allowedStartTime: dto.allowed_start_time,
+    allowedEndTime: dto.allowed_end_time,
+    maxDailyMessages: dto.max_daily_messages,
+    minIntervalSec: dto.min_interval_sec,
+    maxIntervalSec: dto.max_interval_sec,
+  };
+}
+
+export function mapUiBrainToApi(cfg: BrainConfig): ApiBrainConfig {
+  return {
+    persona_prompt: cfg.personaPrompt,
+    problem_solved: cfg.problemSolved,
+    common_objections: cfg.commonObjections,
+    handoff_triggers: cfg.handoffTriggers,
+    templates: cfg.templates,
+    allowed_start_time: cfg.allowedStartTime,
+    allowed_end_time: cfg.allowedEndTime,
+    max_daily_messages: cfg.maxDailyMessages,
+    min_interval_sec: cfg.minIntervalSec,
+    max_interval_sec: cfg.maxIntervalSec,
+  };
+}
+
+export function mapApiConnToUi(
+  dto: ApiConnectionConfig,
+  wa: ApiWhatsAppStatus
+): ConnectionConfig {
+  return {
+    whatsappConnected: wa.connected,
+    whatsappPhone: wa.phone || 'Instância pareada via Evolution API',
+    whatsappDeviceName: wa.instance_name || 'garimpo_prospeccao',
+    whatsappQrBase64: wa.qr_code_base64 ?? null,
+    lastSyncAt: wa.connected ? 'Sincronizado agora' : wa.state,
+    alertPhone: dto.alert_phone,
+    searchProvider: dto.search_provider,
+    searchApiKey: dto.search_api_key,
+    aiProvider: dto.ai_provider,
+    aiApiKey: dto.ai_api_key,
+  };
+}
+
+export function mapUiConnToApi(cfg: ConnectionConfig): ApiConnectionConfig {
+  return {
+    alert_phone: cfg.alertPhone,
+    search_provider: cfg.searchProvider,
+    search_api_key: cfg.searchApiKey,
+    ai_provider: cfg.aiProvider,
+    ai_api_key: cfg.aiApiKey,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// API Methods
+// ---------------------------------------------------------------------------
+
 export const garimpoApi = {
-  health: () => request<{ status: string; service: string }>('/health'),
+  health: () => request<{ status: string; service: string }>('/health', undefined, 3000),
+
   getDashboard: () => request<ApiDashboardResponse>('/dashboard'),
+
   toggleWorker: () =>
     request<{ running: boolean }>('/worker/toggle', { method: 'POST' }),
 
-  searchProspects: (city: string, niche: string, limit: number) =>
-    request<ProspectingCandidate[]>('/prospecting/search', {
-      method: 'POST',
-      body: JSON.stringify({ city, niche, limit }),
-    }),
+  searchProspects: async (city: string, niche: string, limit: number) => {
+    const res = await request<ApiCandidate[]>(
+      '/prospecting/search',
+      {
+        method: 'POST',
+        body: JSON.stringify({ city, niche, limit }),
+      },
+      20000
+    );
+    return res.map(mapApiCandidate);
+  },
 
   enqueueProspects: (candidates: ProspectingCandidate[]) =>
     request<{ enqueued_count: number; skipped_duplicates: number; lead_ids: string[] }>(
@@ -79,60 +306,66 @@ export const garimpoApi = {
       }
     ),
 
-  listLeads: (stage?: FunnelStage) =>
-    request<Lead[]>(stage ? `/leads?stage=${encodeURIComponent(stage)}` : '/leads'),
+  listLeads: async (stage?: FunnelStage) => {
+    const path = stage ? `/leads?stage=${encodeURIComponent(stage)}` : '/leads';
+    const res = await request<ApiLead[]>(path);
+    return res.map(mapApiLead);
+  },
 
-  updateLeadStage: (leadId: string, stage: FunnelStage) =>
-    request<Lead>(`/leads/${leadId}/stage`, {
+  updateLeadStage: async (leadId: string, stage: FunnelStage) => {
+    const res = await request<ApiLead>(`/leads/${leadId}/stage`, {
       method: 'PATCH',
       body: JSON.stringify({ stage }),
-    }),
+    });
+    return mapApiLead(res);
+  },
 
-  toggleLeadAi: (leadId: string, aiActive: boolean) =>
-    request<Lead>(`/leads/${leadId}/ai`, {
+  toggleLeadAi: async (leadId: string, aiActive: boolean) => {
+    const res = await request<ApiLead>(`/leads/${leadId}/ai`, {
       method: 'PATCH',
       body: JSON.stringify({ ai_active: aiActive }),
-    }),
+    });
+    return mapApiLead(res);
+  },
 
-  sendManualMessage: (leadId: string, text: string) =>
-    request<{ id: string; sender: string; text: string; created_at: string }>(
-      `/leads/${leadId}/messages`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ text }),
-      }
-    ),
+  sendManualMessage: async (leadId: string, text: string) => {
+    const res = await request<ApiMessage>(`/leads/${leadId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+    return mapApiMessage(res);
+  },
 
-  getBrainSettings: () => request<BrainConfig>('/settings/brain'),
-  updateBrainSettings: (config: BrainConfig) =>
-    request<BrainConfig>('/settings/brain', {
+  getBrainSettings: async () => {
+    const res = await request<ApiBrainConfig>('/settings/brain');
+    return mapApiBrainToUi(res);
+  },
+
+  updateBrainSettings: async (config: BrainConfig) => {
+    const res = await request<ApiBrainConfig>('/settings/brain', {
       method: 'PUT',
-      body: JSON.stringify(config),
-    }),
+      body: JSON.stringify(mapUiBrainToApi(config)),
+    });
+    return mapApiBrainToUi(res);
+  },
 
-  getConnectionSettings: () => request<ConnectionConfig>('/settings/connections'),
-  updateConnectionSettings: (config: ConnectionConfig) =>
-    request<ConnectionConfig>('/settings/connections', {
+  getConnectionSettingsRaw: () => request<ApiConnectionConfig>('/settings/connections'),
+
+  updateConnectionSettings: async (
+    config: ConnectionConfig,
+    waStatus: ApiWhatsAppStatus
+  ) => {
+    const res = await request<ApiConnectionConfig>('/settings/connections', {
       method: 'PUT',
-      body: JSON.stringify(config),
-    }),
+      body: JSON.stringify(mapUiConnToApi(config)),
+    });
+    return mapApiConnToUi(res, waStatus);
+  },
 
-  getWhatsAppStatus: () =>
-    request<{
-      connected: boolean;
-      state: string;
-      instance_name: string;
-      phone?: string | null;
-      qr_code_base64?: string | null;
-    }>('/whatsapp/status'),
+  getWhatsAppStatus: () => request<ApiWhatsAppStatus>('/whatsapp/status'),
 
   connectWhatsApp: () =>
-    request<{
-      connected: boolean;
-      state: string;
-      instance_name: string;
-      qr_code_base64?: string | null;
-    }>('/whatsapp/connect', { method: 'POST' }),
+    request<ApiWhatsAppStatus>('/whatsapp/connect', { method: 'POST' }, 15000),
 
   logoutWhatsApp: () =>
     request<{ logged_out: boolean }>('/whatsapp/logout', { method: 'POST' }),

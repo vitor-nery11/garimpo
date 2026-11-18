@@ -10,6 +10,7 @@ import {
   Pickaxe,
   Play,
   Plug,
+  RefreshCw,
   Search,
   X,
 } from 'lucide-react';
@@ -71,6 +72,8 @@ export function formatCountdown(seconds: number): string {
 
 export function Layout({ children }: { children: ReactNode }) {
   const {
+    backendMode,
+    retryApiConnection,
     activeTab,
     setActiveTab,
     hotLeads,
@@ -232,6 +235,30 @@ export function Layout({ children }: { children: ReactNode }) {
             <div className="text-[11px] font-mono text-slate-400 truncate">
               {workerStatusText}
             </div>
+          </div>
+
+          <div className="mt-2.5 flex items-center justify-between px-2 py-1.5 rounded-lg bg-slate-950/50 border border-slate-800/70">
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  backendMode === 'api' ? 'bg-emerald-400' : 'bg-amber-400'
+                }`}
+              />
+              <span className="text-slate-400">
+                {backendMode === 'api' ? 'API FastAPI Online' : 'Modo Demo (Offline)'}
+              </span>
+            </div>
+            {backendMode === 'demo' && (
+              <button
+                type="button"
+                onClick={() => void retryApiConnection()}
+                className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-400 hover:text-emerald-300 cursor-pointer"
+                title="Tentar conectar ao backend FastAPI"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                Reconectar
+              </button>
+            )}
           </div>
         </div>
       </aside>

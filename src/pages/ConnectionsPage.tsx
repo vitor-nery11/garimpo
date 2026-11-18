@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BellRing,
   CheckCircle2,
@@ -16,7 +16,7 @@ import { useGarimpo } from '../context/GarimpoContext';
 import type { ConnectionConfig } from '../types/garimpo';
 
 function QrCodeMock({ seed }: { seed: number }) {
-  // Deterministic crisp SVG QR matrix for pairing UI preview
+  // Deterministic crisp SVG QR matrix for pairing UI preview in demo mode
   const size = 21;
   const cells: Array<{ x: number; y: number }> = [];
 
@@ -68,9 +68,12 @@ function QrCodeMock({ seed }: { seed: number }) {
 
 export function ConnectionsPage() {
   const {
+    backendMode,
     connectionConfig,
     updateConnectionConfig,
     toggleWhatsappConnection,
+    requestWhatsappQrCode,
+    refreshWhatsappStatus,
     pushToast,
   } = useGarimpo();
 
@@ -78,6 +81,16 @@ export function ConnectionsPage() {
   const [showSearchKey, setShowSearchKey] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
   const [qrSeed, setQrSeed] = useState(1);
+
+  useEffect(() => {
+    setForm(connectionConfig);
+  }, [connectionConfig]);
+
+  const qrSrc = connectionConfig.whatsappQrBase64
+    ? connectionConfig.whatsappQrBase64.startsWith('data:image')
+      ? connectionConfig.whatsappQrBase64
+      : `data:image/png;base64,${connectionConfig.whatsappQrBase64}`
+    : null;
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -162,7 +175,7 @@ export function ConnectionsPage() {
                 </div>
                 <div className="space-y-1.5 text-xs text-slate-300">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Número Pareado:</span>
+                    <span className="text-slate-500">Número / Instância:</span>
                     <span className="font-mono text-white">
                       {connectionConfig.whatsappPhone}
                     </span>
@@ -181,10 +194,22 @@ export function ConnectionsPage() {
               </div>
             ) : (
               <div className="rounded-xl bg-slate-950/80 border border-slate-800 p-5 flex flex-col items-center text-center gap-3">
-                <QrCodeMock seed={qrSeed} />
+                {qrSrc ? (
+                  <img
+                    src={qrSrc}
+                    alt="QR Code WhatsApp Evolution API"
+                    className="w-44 h-44 bg-white rounded-xl p-2 shadow-lg object-contain"
+                  />
+                ) : (
+                  <QrCodeMock seed={qrSeed} />
+                )}
                 <div className="space-y-1">
                   <p className="text-xs font-medium text-white">
-                    Escaneie no WhatsApp → Aparelhos Conectados
+                    {qrSrc
+                      ? 'Escaneie este QR Code no WhatsApp → Aparelhos Conectados'
+                      : backendMode === 'api'
+                        ? 'Clique em "Gerar QR Code" para conectar via Evolution API'
+                        : 'Escaneie no WhatsApp → Aparelhos Conectados (Modo Demo)'}
                   </p>
                   <p className="text-[11px] text-slate-500">
                     Use o chip exclusivo de prospecção para proteger seu número pessoal.
@@ -210,37 +235,47 @@ export function ConnectionsPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    pushToast(
-                      'Instância reconectada',
-                      'Heartbeat verificado com sucesso.',
-                      'success'
-                    )
-                  }
+                  onClick={() => void refreshWhatsappStatus()}
                   className="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
-                  Reconectar Sessão
+                  Verificar Sessão
                 </button>
               </>
             ) : (
               <>
                 <button
                   type="button"
-                  onClick={() => setQrSeed((s) => s + 1)}
+                  onClick={() => {
+                    if (backendMode === 'api') {
+                      void requestWhatsappQrCode();
+                    } else {
+                      setQrSeed((s) => s + 1);
+                    }
+                  }}
                   className="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
-                  Novo QR Code
+                  {backendMode === 'api' ? 'Gerar QR Code' : 'Novo QR Code'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => toggleWhatsappConnection(true)}
-                  className="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold transition cursor-pointer"
-                >
-                  <WifiOff className="w-4 h-4 hidden" />
-                  Simular Pareamento
-                </button>
+                {backendMode === 'api' ? (
+                  <button
+                    type="button"
+                    onClick={() => void refreshWhatsappStatus()}
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold transition cursor-pointer"
+                  >
+                    Verificar Pareamento
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => toggleWhatsappConnection(true)}
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold transition cursor-pointer"
+                  >
+                    <WifiOff className="w-4 h-4 hidden" />
+                    Simular Pareamento
+                  </button>
+                )}
               </>
             )}
           </div>

@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -14,8 +15,14 @@ import {
   INITIAL_LEADS,
   PROSPECTING_CATALOG,
 } from '../data/mockData';
+import {
+  garimpoApi,
+  mapApiConnToUi,
+  type ApiWhatsAppStatus,
+} from '../services/api';
 import type {
   AppTab,
+  BackendMode,
   BrainConfig,
   ConnectionConfig,
   DailyStats,
@@ -27,6 +34,8 @@ import type {
 } from '../types/garimpo';
 
 interface GarimpoContextValue {
+  backendMode: BackendMode;
+  retryApiConnection: () => Promise<void>;
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
   leads: Lead[];
@@ -57,6 +66,8 @@ interface GarimpoContextValue {
   connectionConfig: ConnectionConfig;
   updateConnectionConfig: (next: ConnectionConfig) => void;
   toggleWhatsappConnection: (connected: boolean) => void;
+  requestWhatsappQrCode: () => Promise<void>;
+  refreshWhatsappStatus: () => Promise<void>;
   // Toasts
   toasts: ToastNotification[];
   pushToast: (title: string, description?: string, type?: ToastNotification['type']) => void;
@@ -184,6 +195,7 @@ function generateDynamicCandidates(
       instagramHandle: diagnostic === 'so_instagram' ? `@${slug}` : undefined,
       rating: Number((4.3 + ((idx * 7) % 7) * 0.1).toFixed(1)),
       reviewsCount: 24 + ((idx * 19) % 180),
+      hasWhatsapp: true,
       alreadyQueued: existingNames.has(companyName.toLowerCase()),
     });
     idx += 1;
@@ -193,6 +205,7 @@ function generateDynamicCandidates(
 }
 
 export function GarimpoProvider({ children }: { children: ReactNode }) {
+  const [backendMode, setBackendMode] = useState<BackendMode>('demo');
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
   const [leads, setLeads] = useState<Lead[]>(() =>
     loadFromStorage(STORAGE_KEYS.leads, INITIAL_LEADS)
@@ -212,6 +225,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   );
 
   const [workerRunning, setWorkerRunning] = useState<boolean>(true);
+  const [apiWithinHours, setApiWithinHours] = useState<boolean | null>(null);
   const [nextDispatchSeconds, setNextDispatchSeconds] = useState<number>(102); // 1m 42s
   const [searchResults, setSearchResults] = useState<ProspectingCandidate[]>(() =>
     PROSPECTING_CATALOG.slice(0, 8)
@@ -219,26 +233,36 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
+  const lastWaStatusRef = useRef<ApiWhatsAppStatus>({
+    connected: false,
+    state: 'close',
+    instance_name: 'garimpo_prospeccao',
+  });
+
+  // Persist local fallback state only while in demo mode
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.leads, JSON.stringify(leads));
-  }, [leads]);
+    if (backendMode === 'demo') {
+      localStorage.setItem(STORAGE_KEYS.leads, JSON.stringify(leads));
+    }
+  }, [leads, backendMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.brain, JSON.stringify(brainConfig));
-  }, [brainConfig]);
+    if (backendMode === 'demo') {
+      localStorage.setItem(STORAGE_KEYS.brain, JSON.stringify(brainConfig));
+    }
+  }, [brainConfig, backendMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.connections, JSON.stringify(connectionConfig));
-  }, [connectionConfig]);
+    if (backendMode === 'demo') {
+      localStorage.setItem(STORAGE_KEYS.connections, JSON.stringify(connectionConfig));
+    }
+  }, [connectionConfig, backendMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.stats, JSON.stringify(dailyStats));
-  }, [dailyStats]);
-
-  const isWithinBusinessHours = useMemo(
-    () => checkWithinBusinessHours(brainConfig.allowedStartTime, brainConfig.allowedEndTime),
-    [brainConfig.allowedStartTime, brainConfig.allowedEndTime]
-  );
+    if (backendMode === 'demo') {
+      localStorage.setItem(STORAGE_KEYS.stats, JSON.stringify(dailyStats));
+    }
+  }, [dailyStats, backendMode]);
 
   const pushToast = useCallback(
     (title: string, description?: string, type: ToastNotification['type'] = 'success') => {
@@ -255,7 +279,104 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Countdown tick for the Worker indicator
+  const syncFromApi = useCallback(async (includeSettings: boolean) => {
+    const [dashboard, apiLeads] = await Promise.all([
+      garimpoApi.getDashboard(),
+      garimpoApi.listLeads(),
+    ]);
+
+    setWorkerRunning(dashboard.worker.running);
+    setApiWithinHours(dashboard.worker.within_business_hours);
+    setNextDispatchSeconds(dashboard.worker.next_dispatch_seconds);
+    setDailyStats({
+      leadsExtractedToday: dashboard.metrics.leads_extracted_today,
+      messagesSentToday: dashboard.metrics.messages_sent_today,
+      repliesReceivedToday: dashboard.metrics.replies_received_today,
+    });
+    setLeads(apiLeads);
+    setSelectedChatLeadId((prev) => {
+      if (prev && apiLeads.some((l) => l.id === prev)) return prev;
+      return (
+        apiLeads.find((l) => l.stage === 'assumir_conversa')?.id ??
+        apiLeads[0]?.id ??
+        null
+      );
+    });
+
+    if (includeSettings) {
+      const [brain, connRaw, waStatus] = await Promise.all([
+        garimpoApi.getBrainSettings(),
+        garimpoApi.getConnectionSettingsRaw(),
+        garimpoApi.getWhatsAppStatus(),
+      ]);
+      lastWaStatusRef.current = waStatus;
+      setBrainConfig(brain);
+      setConnectionConfig((prev) => ({
+        ...mapApiConnToUi(connRaw, waStatus),
+        whatsappQrBase64: waStatus.qr_code_base64 ?? prev.whatsappQrBase64 ?? null,
+      }));
+    } else {
+      setConnectionConfig((prev) => ({
+        ...prev,
+        whatsappConnected: dashboard.worker.whatsapp_connected,
+      }));
+    }
+  }, []);
+
+  const bootstrapApi = useCallback(
+    async (notifyOnSuccess = false) => {
+      try {
+        await garimpoApi.health();
+        await syncFromApi(true);
+        setBackendMode('api');
+        if (notifyOnSuccess) {
+          pushToast(
+            'Conectado ao backend FastAPI',
+            'Dados sincronizados com PostgreSQL e Redis.',
+            'success'
+          );
+        }
+      } catch {
+        setBackendMode('demo');
+        if (notifyOnSuccess) {
+          pushToast(
+            'Backend indisponível no momento',
+            'Continuando em Modo Demo local.',
+            'warning'
+          );
+        }
+      }
+    },
+    [syncFromApi, pushToast]
+  );
+
+  // Initial API discovery
+  useEffect(() => {
+    void bootstrapApi(false);
+  }, [bootstrapApi]);
+
+  // Real-time 5s polling when connected to FastAPI backend
+  useEffect(() => {
+    if (backendMode !== 'api') return;
+    const interval = window.setInterval(() => {
+      void syncFromApi(false).catch(() => {
+        // Keep current mode on transient hiccup; user can manually retry if needed
+      });
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [backendMode, syncFromApi]);
+
+  const isWithinBusinessHours = useMemo(() => {
+    if (backendMode === 'api' && apiWithinHours !== null) {
+      return apiWithinHours;
+    }
+    return checkWithinBusinessHours(
+      brainConfig.allowedStartTime,
+      brainConfig.allowedEndTime
+    );
+  }, [backendMode, apiWithinHours, brainConfig.allowedStartTime, brainConfig.allowedEndTime]);
+
+  // Local 1s countdown tick for Worker indicator
   useEffect(() => {
     if (!workerRunning || !isWithinBusinessHours || !connectionConfig.whatsappConnected) {
       return;
@@ -264,6 +385,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     const timer = window.setInterval(() => {
       setNextDispatchSeconds((prev) => {
         if (prev <= 1) {
+          if (backendMode === 'api') return 0;
           const min = Math.max(15, brainConfig.minIntervalSec);
           const max = Math.max(min, brainConfig.maxIntervalSec);
           return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -274,6 +396,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
 
     return () => window.clearInterval(timer);
   }, [
+    backendMode,
     workerRunning,
     isWithinBusinessHours,
     connectionConfig.whatsappConnected,
@@ -282,6 +405,25 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   ]);
 
   const toggleWorker = useCallback(() => {
+    if (backendMode === 'api') {
+      void garimpoApi
+        .toggleWorker()
+        .then(({ running }) => {
+          setWorkerRunning(running);
+          pushToast(
+            running ? 'Worker ativado' : 'Worker pausado',
+            running
+              ? 'Os disparos automáticos retomaram respeitando a cadência anti-ban.'
+              : 'Todos os disparos em fila foram pausados imediatamente.',
+            running ? 'success' : 'warning'
+          );
+        })
+        .catch(() => {
+          pushToast('Erro ao alternar Worker', 'Verifique a conexão com a API.', 'warning');
+        });
+      return;
+    }
+
     setWorkerRunning((prev) => {
       const next = !prev;
       pushToast(
@@ -293,7 +435,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
       );
       return next;
     });
-  }, [pushToast]);
+  }, [backendMode, pushToast]);
 
   const openLeadInChat = useCallback((leadId: string) => {
     setSelectedChatLeadId(leadId);
@@ -303,6 +445,29 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   const runProspectingSearch = useCallback(
     (city: string, niche: string, limit: number) => {
       setIsSearching(true);
+      if (backendMode === 'api') {
+        void garimpoApi
+          .searchProspects(city, niche, limit)
+          .then((results) => {
+            setSearchResults(results);
+            const eligibleCount = results.filter((r) => r.diagnostic !== 'possui_site').length;
+            setDailyStats((prev) => ({
+              ...prev,
+              leadsExtractedToday: prev.leadsExtractedToday + results.length,
+            }));
+            pushToast(
+              `${results.length} empresas encontradas`,
+              `${eligibleCount} elegíveis (sem site ou apenas Instagram/Linktree).`,
+              'info'
+            );
+          })
+          .catch(() => {
+            pushToast('Erro na busca', 'Falha ao consultar o endpoint de prospecção.', 'warning');
+          })
+          .finally(() => setIsSearching(false));
+        return;
+      }
+
       window.setTimeout(() => {
         const results = generateDynamicCandidates(city, niche, limit, leads);
         setSearchResults(results);
@@ -319,7 +484,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         );
       }, 650);
     },
-    [leads, pushToast]
+    [backendMode, leads, pushToast]
   );
 
   const sendCandidatesToQueue = useCallback(
@@ -328,6 +493,30 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         (c) => candidateIds.includes(c.id) && !c.alreadyQueued
       );
       if (selected.length === 0) return;
+
+      if (backendMode === 'api') {
+        void garimpoApi
+          .enqueueProspects(selected)
+          .then(async (res) => {
+            setSearchResults((prev) =>
+              prev.map((item) =>
+                candidateIds.includes(item.id) ? { ...item, alreadyQueued: true } : item
+              )
+            );
+            await syncFromApi(false);
+            pushToast(
+              `${res.enqueued_count} lead(s) enviados para a fila`,
+              res.skipped_duplicates > 0
+                ? `${res.skipped_duplicates} duplicado(s) ignorado(s).`
+                : 'Já disponíveis na fila do Redis e coluna "Na Fila" do Kanban.',
+              'success'
+            );
+          })
+          .catch(() => {
+            pushToast('Erro ao enfileirar leads', 'Não foi possível salvar no backend.', 'warning');
+          });
+        return;
+      }
 
       const newLeads: Lead[] = selected.map((c) => ({
         id: `lead-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -359,7 +548,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         'success'
       );
     },
-    [searchResults, pushToast]
+    [backendMode, searchResults, syncFromApi, pushToast]
   );
 
   const moveLeadStage = useCallback(
@@ -378,32 +567,92 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
           };
         })
       );
+
+      if (backendMode === 'api') {
+        void garimpoApi
+          .updateLeadStage(leadId, newStage)
+          .then((updated) => {
+            setLeads((prev) => prev.map((l) => (l.id === leadId ? updated : l)));
+          })
+          .catch(() => {
+            pushToast('Erro ao mover etapa', 'Falha ao sincronizar etapa com o servidor.', 'warning');
+          });
+      }
     },
-    []
+    [backendMode, pushToast]
   );
 
   const toggleLeadAi = useCallback(
     (leadId: string) => {
+      const currentLead = leads.find((l) => l.id === leadId);
+      if (!currentLead) return;
+      const nextAi = !currentLead.aiActive;
+
       setLeads((prev) =>
-        prev.map((lead) => {
-          if (lead.id !== leadId) return lead;
-          const nextAi = !lead.aiActive;
-          pushToast(
-            nextAi ? 'IA reativada para este contato' : 'IA pausada para este contato',
-            lead.companyName,
-            nextAi ? 'info' : 'warning'
-          );
-          return { ...lead, aiActive: nextAi };
-        })
+        prev.map((lead) => (lead.id === leadId ? { ...lead, aiActive: nextAi } : lead))
+      );
+
+      if (backendMode === 'api') {
+        void garimpoApi
+          .toggleLeadAi(leadId, nextAi)
+          .then((updated) => {
+            setLeads((prev) => prev.map((l) => (l.id === leadId ? updated : l)));
+            pushToast(
+              nextAi ? 'IA reativada para este contato' : 'IA pausada para este contato',
+              currentLead.companyName,
+              nextAi ? 'info' : 'warning'
+            );
+          })
+          .catch(() => {
+            pushToast('Erro ao alternar IA', 'Não foi possível atualizar no servidor.', 'warning');
+          });
+        return;
+      }
+
+      pushToast(
+        nextAi ? 'IA reativada para este contato' : 'IA pausada para este contato',
+        currentLead.companyName,
+        nextAi ? 'info' : 'warning'
       );
     },
-    [pushToast]
+    [backendMode, leads, pushToast]
   );
 
   const sendManualMessage = useCallback(
     (leadId: string, text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+
+      if (backendMode === 'api') {
+        void garimpoApi
+          .sendManualMessage(leadId, trimmed)
+          .then((msg) => {
+            setLeads((prev) =>
+              prev.map((lead) => {
+                if (lead.id !== leadId) return lead;
+                const nextStage: FunnelStage =
+                  lead.stage === 'na_fila' || lead.stage === 'abordado'
+                    ? 'assumir_conversa'
+                    : lead.stage;
+                return {
+                  ...lead,
+                  aiActive: false,
+                  stage: nextStage,
+                  lastMessageMinutesAgo: 0,
+                  messages: [...lead.messages, msg],
+                };
+              })
+            );
+            setDailyStats((prev) => ({
+              ...prev,
+              messagesSentToday: prev.messagesSentToday + 1,
+            }));
+          })
+          .catch(() => {
+            pushToast('Erro ao enviar mensagem', 'Falha na comunicação com a API.', 'warning');
+          });
+        return;
+      }
 
       const now = new Date();
       const timeLabel = now.toLocaleTimeString('pt-BR', {
@@ -420,7 +669,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
               : lead.stage;
           return {
             ...lead,
-            aiActive: false, // Rule: sending manual message automatically disables AI for this lead
+            aiActive: false,
             stage: nextStage,
             lastMessageMinutesAgo: 0,
             messages: [
@@ -441,11 +690,28 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         messagesSentToday: prev.messagesSentToday + 1,
       }));
     },
-    []
+    [backendMode, pushToast]
   );
 
   const updateBrainConfig = useCallback(
     (next: BrainConfig) => {
+      if (backendMode === 'api') {
+        void garimpoApi
+          .updateBrainSettings(next)
+          .then((saved) => {
+            setBrainConfig(saved);
+            pushToast(
+              'Configurações da IA salvas',
+              'Prompt, variações e regras anti-ban gravados no PostgreSQL.',
+              'success'
+            );
+          })
+          .catch(() => {
+            pushToast('Erro ao salvar configurações', 'Verifique a conexão com a API.', 'warning');
+          });
+        return;
+      }
+
       setBrainConfig(next);
       pushToast(
         'Configurações da IA salvas',
@@ -453,11 +719,31 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         'success'
       );
     },
-    [pushToast]
+    [backendMode, pushToast]
   );
 
   const updateConnectionConfig = useCallback(
     (next: ConnectionConfig) => {
+      if (backendMode === 'api') {
+        void garimpoApi
+          .updateConnectionSettings(next, lastWaStatusRef.current)
+          .then((saved) => {
+            setConnectionConfig((prev) => ({
+              ...saved,
+              whatsappQrBase64: prev.whatsappQrBase64,
+            }));
+            pushToast(
+              'Conexões & Alertas atualizados',
+              'Chaves e telefone de alerta salvos no PostgreSQL.',
+              'success'
+            );
+          })
+          .catch(() => {
+            pushToast('Erro ao salvar chaves', 'Falha na comunicação com o backend.', 'warning');
+          });
+        return;
+      }
+
       setConnectionConfig(next);
       pushToast(
         'Conexões & Alertas atualizados',
@@ -465,11 +751,93 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         'success'
       );
     },
-    [pushToast]
+    [backendMode, pushToast]
   );
+
+  const requestWhatsappQrCode = useCallback(async () => {
+    if (backendMode !== 'api') return;
+    try {
+      const wa = await garimpoApi.connectWhatsApp();
+      lastWaStatusRef.current = wa;
+      setConnectionConfig((prev) => ({
+        ...prev,
+        whatsappConnected: wa.connected,
+        whatsappDeviceName: wa.instance_name || prev.whatsappDeviceName,
+        whatsappQrBase64: wa.qr_code_base64 ?? null,
+        lastSyncAt: wa.connected ? 'Conectado' : 'Aguardando leitura do QR Code',
+      }));
+      if (wa.qr_code_base64) {
+        pushToast('QR Code gerado', 'Escaneie pelo WhatsApp em Aparelhos Conectados.', 'info');
+      } else {
+        pushToast(
+          'Evolution API indisponível',
+          'Suba o container evolution-api para gerar o QR Code real.',
+          'warning'
+        );
+      }
+    } catch {
+      pushToast('Erro ao solicitar QR Code', 'Falha ao chamar /whatsapp/connect.', 'warning');
+    }
+  }, [backendMode, pushToast]);
+
+  const refreshWhatsappStatus = useCallback(async () => {
+    if (backendMode !== 'api') {
+      pushToast('Instância verificada', 'Modo Demo ativo.', 'info');
+      return;
+    }
+    try {
+      const wa = await garimpoApi.getWhatsAppStatus();
+      lastWaStatusRef.current = wa;
+      setConnectionConfig((prev) => ({
+        ...prev,
+        whatsappConnected: wa.connected,
+        whatsappDeviceName: wa.instance_name || prev.whatsappDeviceName,
+        whatsappPhone: wa.phone || prev.whatsappPhone,
+        lastSyncAt: wa.connected ? 'Agora mesmo' : wa.state,
+      }));
+      pushToast(
+        wa.connected ? 'WhatsApp conectado' : 'WhatsApp desconectado',
+        `Estado atual da instância: ${wa.state}`,
+        wa.connected ? 'success' : 'warning'
+      );
+    } catch {
+      pushToast('Erro ao verificar status', 'Falha ao consultar /whatsapp/status.', 'warning');
+    }
+  }, [backendMode, pushToast]);
 
   const toggleWhatsappConnection = useCallback(
     (connected: boolean) => {
+      if (backendMode === 'api') {
+        if (!connected) {
+          void garimpoApi
+            .logoutWhatsApp()
+            .then(() => {
+              lastWaStatusRef.current = {
+                ...lastWaStatusRef.current,
+                connected: false,
+                state: 'close',
+              };
+              setConnectionConfig((prev) => ({
+                ...prev,
+                whatsappConnected: false,
+                whatsappQrBase64: null,
+                lastSyncAt: 'Desconectado',
+              }));
+              pushToast(
+                'Instância desconectada',
+                'Sessão encerrada na Evolution API.',
+                'warning'
+              );
+            })
+            .catch(() => {
+              pushToast('Erro ao desconectar', 'Falha ao chamar /whatsapp/logout.', 'warning');
+            });
+        } else {
+          void requestWhatsappQrCode();
+        }
+        return;
+      }
+
       setConnectionConfig((prev) => ({
         ...prev,
         whatsappConnected: connected,
@@ -483,7 +851,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         connected ? 'success' : 'warning'
       );
     },
-    [pushToast]
+    [backendMode, pushToast, requestWhatsappQrCode]
   );
 
   const hotLeads = useMemo(
@@ -500,6 +868,8 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   }, [dailyStats]);
 
   const value: GarimpoContextValue = {
+    backendMode,
+    retryApiConnection: () => bootstrapApi(true),
     activeTab,
     setActiveTab,
     leads,
@@ -525,6 +895,8 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     connectionConfig,
     updateConnectionConfig,
     toggleWhatsappConnection,
+    requestWhatsappQrCode,
+    refreshWhatsappStatus,
     toasts,
     pushToast,
     dismissToast,

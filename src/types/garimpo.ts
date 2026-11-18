@@ -49,6 +49,7 @@ export interface ProspectingCandidate {
   diagnostic: SiteDiagnostic;
   rating: number;
   reviewsCount: number;
+  hasWhatsapp?: boolean;
   alreadyQueued?: boolean;
 }
 
@@ -75,6 +76,7 @@ export interface ConnectionConfig {
   whatsappConnected: boolean;
   whatsappPhone: string;
   whatsappDeviceName: string;
+  whatsappQrBase64?: string | null;
   lastSyncAt: string;
   alertPhone: string;
   searchProvider: 'google_places' | 'serper';
@@ -82,6 +84,8 @@ export interface ConnectionConfig {
   aiProvider: 'openai' | 'gemini';
   aiApiKey: string;
 }
+
+export type BackendMode = 'api' | 'demo';
 
 export interface DailyStats {
   leadsExtractedToday: number;
