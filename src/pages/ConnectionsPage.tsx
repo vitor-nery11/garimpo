@@ -78,13 +78,21 @@ export function ConnectionsPage() {
   } = useGarimpo();
 
   const [form, setForm] = useState<ConnectionConfig>(connectionConfig);
+  const [isDirty, setIsDirty] = useState(false);
   const [showSearchKey, setShowSearchKey] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
   const [qrSeed, setQrSeed] = useState(1);
 
   useEffect(() => {
-    setForm(connectionConfig);
-  }, [connectionConfig]);
+    if (!isDirty) {
+      setForm(connectionConfig);
+    }
+  }, [connectionConfig, isDirty]);
+
+  const updateForm = (patch: Partial<ConnectionConfig>) => {
+    setIsDirty(true);
+    setForm((prev) => ({ ...prev, ...patch }));
+  };
 
   const qrSrc = connectionConfig.whatsappQrBase64
     ? connectionConfig.whatsappQrBase64.startsWith('data:image')
@@ -94,6 +102,7 @@ export function ConnectionsPage() {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    setIsDirty(false);
     updateConnectionConfig({
       ...form,
       whatsappConnected: connectionConfig.whatsappConnected,
@@ -306,8 +315,8 @@ export function ConnectionsPage() {
               <input
                 type="text"
                 value={form.alertPhone}
-                onChange={(e) => setForm({ ...form, alertPhone: e.target.value })}
-                placeholder="+55 (11) 99999-9999"
+                onChange={(e) => updateForm({ alertPhone: e.target.value })}
+                placeholder="Ex: 5573988323477"
                 className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-white focus:outline-none focus:border-emerald-500/60"
               />
               <button
@@ -343,8 +352,7 @@ export function ConnectionsPage() {
                 <select
                   value={form.searchProvider}
                   onChange={(e) =>
-                    setForm({
-                      ...form,
+                    updateForm({
                       searchProvider: e.target.value as
                         | 'playwright'
                         | 'google_places'
@@ -370,7 +378,7 @@ export function ConnectionsPage() {
                     type={showSearchKey ? 'text' : 'password'}
                     value={form.searchApiKey}
                     disabled={form.searchProvider === 'playwright'}
-                    onChange={(e) => setForm({ ...form, searchApiKey: e.target.value })}
+                    onChange={(e) => updateForm({ searchApiKey: e.target.value })}
                     placeholder={
                       form.searchProvider === 'playwright'
                         ? 'Playwright navega direto no Google Maps sem precisar de chave'
@@ -404,8 +412,7 @@ export function ConnectionsPage() {
                 <select
                   value={form.aiProvider}
                   onChange={(e) =>
-                    setForm({
-                      ...form,
+                    updateForm({
                       aiProvider: e.target.value as 'openai' | 'gemini',
                     })
                   }
@@ -424,7 +431,7 @@ export function ConnectionsPage() {
                   <input
                     type={showAiKey ? 'text' : 'password'}
                     value={form.aiApiKey}
-                    onChange={(e) => setForm({ ...form, aiApiKey: e.target.value })}
+                    onChange={(e) => updateForm({ aiApiKey: e.target.value })}
                     placeholder="Cole sua chave de IA aqui..."
                     className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-white focus:outline-none focus:border-emerald-500/60"
                   />

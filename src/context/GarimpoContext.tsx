@@ -317,10 +317,15 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
         whatsappQrBase64: waStatus.qr_code_base64 ?? prev.whatsappQrBase64 ?? null,
       }));
     } else {
-      setConnectionConfig((prev) => ({
-        ...prev,
-        whatsappConnected: dashboard.worker.whatsapp_connected,
-      }));
+      setConnectionConfig((prev) => {
+        if (prev.whatsappConnected === dashboard.worker.whatsapp_connected) {
+          return prev;
+        }
+        return {
+          ...prev,
+          whatsappConnected: dashboard.worker.whatsapp_connected,
+        };
+      });
     }
   }, []);
 
