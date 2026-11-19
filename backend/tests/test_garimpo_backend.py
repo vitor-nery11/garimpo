@@ -321,7 +321,7 @@ async def test_gemini_fallback_on_503(monkeypatch):
     class FakeModels:
         async def generate_content(self, *, model, contents, config):
             called_models.append(model)
-            if model == 'gemini-3.8-flash':
+            if model == 'gemini-3.5-flash-lite':
                 raise RuntimeError('503 UNAVAILABLE: high demand')
             return SimpleNamespace(function_calls=None, text='Resposta pelo fallback!')
 
@@ -338,11 +338,15 @@ async def test_gemini_fallback_on_503(monkeypatch):
     svc = AiSdrService()
     decision = await svc._call_gemini(
         api_key='fake-key',
-        model='gemini-3.8-flash',
+        model='gemini-3.5-flash-lite',
         fallback_model='gemini-3.1-flash-lite',
         system_prompt='Prompt',
         history=[Message(id='m1', lead_id='l1', sender='lead', text='Oi')],
     )
     assert decision.action == 'reply'
     assert decision.model_used == 'gemini-3.1-flash-lite'
-    assert called_models == ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite']
+    assert called_models == [
+        'gemini-3.5-flash-lite',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+    ]

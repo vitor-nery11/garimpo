@@ -224,34 +224,39 @@ class AiSdrService:
         )
 
         contents = _build_gemini_contents(history)
-        candidate_models = [model]
-        if fallback_model and fallback_model != model:
-            candidate_models.append(fallback_model)
+        candidate_models: list[str] = []
+        for m in (model, fallback_model, 'gemini-3.8-flash'):
+            if m and m not in candidate_models:
+                candidate_models.append(m)
 
         response = None
         used_model = model
         last_error: Exception | None = None
 
         for candidate in candidate_models:
+            use_low_thinking = True
             for attempt in range(2):
                 try:
+                    cfg_kwargs: dict = {
+                        'system_instruction': system_prompt,
+                        'tools': [
+                            genai_types.Tool(
+                                function_declarations=[handoff_declaration]
+                            )
+                        ],
+                        'temperature': 0.4,
+                        'max_output_tokens': 512,
+                    }
+                    if use_low_thinking:
+                        cfg_kwargs['thinking_config'] = genai_types.ThinkingConfig(
+                            thinking_level=genai_types.ThinkingLevel.LOW
+                        )
+
                     response = await asyncio.wait_for(
                         client.aio.models.generate_content(
                             model=candidate,
                             contents=contents,
-                            config=genai_types.GenerateContentConfig(
-                                system_instruction=system_prompt,
-                                tools=[
-                                    genai_types.Tool(
-                                        function_declarations=[handoff_declaration]
-                                    )
-                                ],
-                                temperature=0.4,
-                                max_output_tokens=512,
-                                thinking_config=genai_types.ThinkingConfig(
-                                    thinking_level=genai_types.ThinkingLevel.MINIMAL
-                                ),
-                            ),
+                            config=genai_types.GenerateContentConfig(**cfg_kwargs),
                         ),
                         timeout=12.0,
                     )
@@ -260,11 +265,20 @@ class AiSdrService:
                 except Exception as exc:
                     last_error = exc
                     err_str = str(exc).upper()
+                    if 'THINKING' in err_str and use_low_thinking:
+                        logger.warning(
+                            'Gemini %s rejeitou thinking_config (%s). Tentando sem thinking_config...',
+                            candidate,
+                            exc,
+                        )
+                        use_low_thinking = False
+                        continue
                     is_timeout = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
                     is_transient = is_timeout or any(
                         token in err_str
                         for token in (
                             '503',
+                            '504',
                             'UNAVAILABLE',
                             '429',
                             'RESOURCE_EXHAUSTED',
