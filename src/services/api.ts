@@ -403,10 +403,11 @@ export const garimpoApi = {
     messages: Array<{ sender: 'lead' | 'ai'; text: string }>;
   }) =>
     request<{
-      action: 'reply' | 'handoff';
+      action: 'reply' | 'handoff' | 'wrong_channel';
       reply_text: string | null;
       handoff_summary: string | null;
       reason: string | null;
+      alternative_channel: string | null;
       provider_used: string;
       model_used: string;
     }>(

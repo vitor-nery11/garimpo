@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Bot,
   ExternalLink,
   Flame,
@@ -22,15 +23,16 @@ type SimulatorMode = 'screen' | 'whatsapp';
 
 interface SimMessage {
   id: string;
-  sender: 'ai' | 'lead' | 'handoff';
+  sender: 'ai' | 'lead' | 'handoff' | 'wrong_channel';
   text: string;
   timeLabel: string;
   reason?: string | null;
+  alternativeChannel?: string | null;
 }
 
 const QUICK_LEAD_REPLIES = [
   'Oi, já temos Instagram e recebemos clientes por lá. Pra que site?',
-  'No momento estou sem tempo para acompanhar criação de site.',
+  '*Ana:* Olá! No momento, não consigo atender a esse tipo de mensagem por aqui. Este canal é destinado ao atendimento odontológico da clínica. 😊',
   'Gostei da ideia! Quanto custa e qual o prazo para entregar?',
   'Pode me mandar uma proposta ou ligar hoje à tarde?',
 ];
@@ -174,7 +176,10 @@ export function BrainTestChatModal({
 
     try {
       const apiHistory = nextHistory
-        .filter((m): m is SimMessage & { sender: 'lead' | 'ai' } => m.sender !== 'handoff')
+        .filter(
+          (m): m is SimMessage & { sender: 'lead' | 'ai' } =>
+            m.sender === 'lead' || m.sender === 'ai'
+        )
         .map((m) => ({ sender: m.sender, text: m.text }));
 
       let useApi = backendMode === 'api';
@@ -217,6 +222,20 @@ export function BrainTestChatModal({
                 res.handoff_summary ||
                 'A IA identificou intenção comercial e acionou o transbordo para atendimento humano.',
               reason: res.reason,
+              timeLabel: nowLabel(),
+            },
+          ]);
+        } else if (res.action === 'wrong_channel') {
+          setHandedOff(true);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `sim-wrong-${Date.now()}`,
+              sender: 'wrong_channel',
+              text:
+                res.handoff_summary ||
+                'A recepção/bot informou que este número não trata demandas comerciais.',
+              alternativeChannel: res.alternative_channel,
               timeLabel: nowLabel(),
             },
           ]);
@@ -467,6 +486,40 @@ export function BrainTestChatModal({
                         )}
                         <span>
                           Em produção: a IA pausaria este contato e enviaria alerta para{' '}
+                          <strong className="font-mono">
+                            {connectionConfig.alertPhone || 'seu WhatsApp'}
+                          </strong>
+                          .
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (msg.sender === 'wrong_channel') {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="rounded-2xl border border-sky-500/40 bg-sky-500/10 p-4 space-y-2 shadow-lg"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-sky-300">
+                          <AlertTriangle className="w-4 h-4 text-sky-400" />
+                          Function Calling: alertar_canal_inadequado() acionada!
+                        </span>
+                        <span className="text-[10px] font-mono text-sky-300/70">
+                          {msg.timeLabel}
+                        </span>
+                      </div>
+                      <p className="text-sm text-sky-100 leading-relaxed">{msg.text}</p>
+                      <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-sky-300/90">
+                        {msg.alternativeChannel && (
+                          <span className="px-2 py-0.5 rounded bg-sky-500/20 font-mono">
+                            canal alternativo: {msg.alternativeChannel}
+                          </span>
+                        )}
+                        <span>
+                          Em produção: a IA pausa para não insistir na recepção e envia alerta ⚠️ para{' '}
                           <strong className="font-mono">
                             {connectionConfig.alertPhone || 'seu WhatsApp'}
                           </strong>

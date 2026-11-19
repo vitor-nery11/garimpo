@@ -206,6 +206,7 @@ async def test_brain_chat(
         reply_text=decision.reply_text,
         handoff_summary=decision.handoff_summary,
         reason=decision.reason,
+        alternative_channel=decision.alternative_channel,
         provider_used=decision.provider_used,
         model_used=decision.model_used,
     )

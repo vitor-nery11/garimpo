@@ -98,8 +98,11 @@ async def handle_evolution_webhook(
     if not phone or not text:
         return {'status': 'ignored', 'reason': 'empty_phone_or_text'}
 
-    # Ignore internal hot-lead alert messages sent to the owner's alert number
-    if from_me and text.startswith('🔥 *LEAD QUENTE NO GARIMPO*'):
+    # Ignore internal alert messages sent to the owner's alert number
+    if from_me and (
+        text.startswith('🔥 *LEAD QUENTE NO GARIMPO*')
+        or text.startswith('⚠️ *CANAL RESTRITO')
+    ):
         return {'status': 'ignored', 'reason': 'internal_alert_message'}
 
     phone_candidates = brazil_phone_variants(phone)

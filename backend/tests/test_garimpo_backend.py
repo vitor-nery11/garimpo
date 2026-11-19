@@ -496,3 +496,90 @@ async def test_lid_remote_jid_alt_and_sync_whatsapp(test_env):
         assert lead['ai_active'] is False
         assert len(lead['messages']) == 3
         assert [m['sender'] for m in lead['messages']] == ['lead', 'user', 'lead']
+
+
+@pytest.mark.asyncio
+async def test_wrong_channel_alert_worker_and_test_chat(test_env):
+    app = test_env['app']
+    session_factory = test_env['session_factory']
+    redis_service: RedisService = test_env['redis_service']
+    evolution_mock = test_env['evolution_mock']
+    transport = ASGITransport(app=app)
+
+    ana_msg = (
+        '*Ana:* Olá! No momento, não consigo atender a esse tipo de mensagem por aqui. '
+        'Este canal é destinado ao atendimento odontológico da clínica. 😊'
+    )
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        # 1. Test via /settings/brain/test-chat
+        r_sim = await client.post(
+            '/api/v1/settings/brain/test-chat',
+            json={
+                'company_name': 'Clinodonto',
+                'niche': 'Clínica Odontológica',
+                'city': 'Itabuna',
+                'diagnostic': 'so_instagram',
+                'persona_prompt': 'Consultor comercial educado.',
+                'problem_solved': 'Sites focados em agendamento pelo Google.',
+                'common_objections': '',
+                'handoff_triggers': 'preço, orçamento',
+                'messages': [
+                    {'sender': 'ai', 'text': 'Olá, equipe da Clinodonto!'},
+                    {'sender': 'lead', 'text': ana_msg},
+                ],
+            },
+        )
+        assert r_sim.status_code == 200
+        assert r_sim.json()['action'] == 'wrong_channel'
+
+        # 2. Test full Worker flow -> pauses AI + calls send_wrong_channel_alert
+        r_q = await client.post(
+            '/api/v1/prospecting/queue',
+            json={
+                'candidates': [
+                    {
+                        'company_name': 'Clinodonto Alerta',
+                        'niche': 'Clínica Odontológica',
+                        'city': 'Itabuna',
+                        'neighborhood': 'Centro',
+                        'phone': '5573982081271',
+                        'diagnostic': 'so_instagram',
+                    }
+                ]
+            },
+        )
+        lead_id = r_q.json()['lead_ids'][0]
+
+        await client.post(
+            '/api/v1/webhooks/evolution',
+            json={
+                'event': 'messages.upsert',
+                'instance': 'test_instance',
+                'data': {
+                    'key': {
+                        'id': 'ana-wrong-channel-1',
+                        'fromMe': False,
+                        'remoteJid': '9999999@lid',
+                        'remoteJidAlt': '557382081271@s.whatsapp.net',
+                    },
+                    'message': {'conversation': ana_msg},
+                },
+            },
+        )
+        await redis_service.client.set(f'garimpo:debounce:until:{lead_id}', '0')
+
+        processed = await process_ready_debounces(
+            session_factory=session_factory,
+            redis_service=redis_service,
+            evolution_service=evolution_mock,
+            ai_service=AiSdrService(),
+        )
+        assert processed == 1
+        evolution_mock.send_wrong_channel_alert.assert_awaited()
+
+        r_lead = await client.get(f'/api/v1/leads/{lead_id}')
+        lead = r_lead.json()
+        assert lead['ai_active'] is False
+        assert lead['stage'] == 'assumir_conversa'
+        assert 'Canal Restrito' in (lead['handoff_summary'] or '')

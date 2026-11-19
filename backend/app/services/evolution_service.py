@@ -153,6 +153,34 @@ class EvolutionService:
         )
         return await self.send_text_message(clean_alert, message)
 
+    async def send_wrong_channel_alert(
+        self,
+        *,
+        alert_phone: str,
+        company_name: str,
+        lead_phone: str,
+        summary: str,
+        alternative_channel: str | None = None,
+    ) -> bool:
+        """Notify the owner's personal WhatsApp when a business says this number is not for commercial demands."""
+        if not alert_phone.strip():
+            return False
+        clean_alert = ''.join(ch for ch in alert_phone if ch.isdigit())
+        alt_line = (
+            f'*Canal alternativo:* {alternative_channel}\n'
+            if alternative_channel and alternative_channel.lower() != 'não informado'
+            else ''
+        )
+        message = (
+            f'⚠️ *CANAL RESTRITO / RECEPÇÃO — GARIMPO*\n\n'
+            f'*Empresa:* {company_name}\n'
+            f'*WhatsApp:* https://wa.me/{lead_phone}\n'
+            f'*Aviso detectado:* {summary}\n'
+            f'{alt_line}\n'
+            f'A IA foi pausada automaticamente para não insistir nesse canal.'
+        )
+        return await self.send_text_message(clean_alert, message)
+
     async def ensure_webhook(
         self, webhook_url: str = 'http://api:8000/api/v1/webhooks/evolution'
     ) -> bool:

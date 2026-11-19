@@ -174,6 +174,34 @@ async def process_ready_debounces(
                         lead.company_name,
                         decision.reason,
                     )
+                elif decision.action == 'wrong_channel':
+                    alt_suffix = (
+                        f' | Canal alternativo: {decision.alternative_channel}'
+                        if decision.alternative_channel
+                        and decision.alternative_channel.lower() != 'não informado'
+                        else ''
+                    )
+                    summary_text = (
+                        decision.handoff_summary
+                        or 'Contato informou que este número não atende demandas comerciais.'
+                    )
+                    lead.ai_active = False
+                    lead.stage = 'assumir_conversa'
+                    lead.handoff_summary = f'⚠️ [Canal Restrito] {summary_text}{alt_suffix}'
+                    lead.last_message_at = now
+                    await db.commit()
+
+                    await evolution_service.send_wrong_channel_alert(
+                        alert_phone=conn.alert_phone,
+                        company_name=lead.company_name,
+                        lead_phone=lead.phone,
+                        summary=summary_text,
+                        alternative_channel=decision.alternative_channel,
+                    )
+                    logger.info(
+                        'Alerta de canal restrito acionado pela IA para %s.',
+                        lead.company_name,
+                    )
                 elif decision.reply_text:
                     await evolution_service.send_text_message(
                         lead.phone, decision.reply_text

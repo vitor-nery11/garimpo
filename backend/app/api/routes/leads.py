@@ -93,7 +93,10 @@ async def sync_whatsapp_messages(
             continue
 
         from_me = bool(key.get('fromMe'))
-        if from_me and text.startswith('🔥 *LEAD QUENTE NO GARIMPO*'):
+        if from_me and (
+            text.startswith('🔥 *LEAD QUENTE NO GARIMPO*')
+            or text.startswith('⚠️ *CANAL RESTRITO')
+        ):
             continue
 
         ext_id = str(key.get('id') or '') or None

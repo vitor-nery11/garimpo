@@ -61,10 +61,11 @@ class BrainTestChatRequest(BaseModel):
 
 
 class BrainTestChatResponse(BaseModel):
-    action: Literal['reply', 'handoff']
+    action: Literal['reply', 'handoff', 'wrong_channel']
     reply_text: str | None = None
     handoff_summary: str | None = None
     reason: str | None = None
+    alternative_channel: str | None = None
     provider_used: str
     model_used: str
 

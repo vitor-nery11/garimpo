@@ -16,10 +16,11 @@ logger = logging.getLogger('garimpo.ai_sdr')
 
 @dataclass
 class AiDecision:
-    action: Literal['reply', 'handoff']
+    action: Literal['reply', 'handoff', 'wrong_channel']
     reply_text: str | None = None
     handoff_summary: str | None = None
     reason: str | None = None
+    alternative_channel: str | None = None
     provider_used: str = 'offline_heuristic'
     model_used: str = 'heuristic'
 
@@ -51,6 +52,52 @@ HANDOFF_TOOL_SCHEMA = {
     },
 }
 
+WRONG_CHANNEL_TOOL_SCHEMA = {
+    'type': 'function',
+    'function': {
+        'name': 'alertar_canal_inadequado',
+        'description': (
+            'CHAME ESTA FUNÇÃO (sem enviar texto ao cliente) sempre que a mensagem indicar que '
+            'este WhatsApp não trata demandas comerciais/parcerias, é exclusivo para pacientes, '
+            'agendamentos ou atendimento da clínica/loja, ou quando um robô/recepção recusar o assunto '
+            'ou indicar outro canal/e-mail/responsável.'
+        ),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'resumo_contexto': {
+                    'type': 'string',
+                    'description': (
+                        'Resumo curto explicando o que a recepção ou bot respondeu sobre o canal.'
+                    ),
+                },
+                'canal_alternativo': {
+                    'type': 'string',
+                    'description': (
+                        'Outro número, e-mail, setor ou responsável informado na mensagem (ou "Não informado").'
+                    ),
+                },
+            },
+            'required': ['resumo_contexto'],
+        },
+    },
+}
+
+WRONG_CHANNEL_HEURISTIC_PHRASES = (
+    'não consigo atender a esse tipo de mensagem',
+    'canal é destinado',
+    'canal exclusivo',
+    'apenas para agendamento',
+    'somente para agendamento',
+    'somente pacientes',
+    'apenas pacientes',
+    'não tratamos esse assunto por aqui',
+    'não tratamos demandas comerciais',
+    'atendimento odontológico',
+    'encaminhar para o responsável',
+    'encaminhar sua mensagem para um responsável',
+)
+
 
 def build_system_prompt(lead: Lead, brain: BrainSettings) -> str:
     return (
@@ -63,10 +110,17 @@ def build_system_prompt(lead: Lead, brain: BrainSettings) -> str:
         f'- Nicho: {lead.niche}\n'
         f'- Cidade: {lead.city} ({lead.neighborhood})\n'
         f'- Diagnóstico do Site: {lead.diagnostic}\n\n'
-        'REGRAS IMPORTANTES:\n'
-        '1. Responda sempre em português do Brasil, de forma natural e curta (máximo 3 frases).\n'
-        '2. Nunca invente preços fechados. Se o cliente pedir valores, orçamento ou reunião, '
-        'chame a função transferir_para_humano imediatamente.'
+        'REGRAS DE DECISÃO (SIGA ESTA ORDEM DE PRIORIDADE):\n'
+        '1. PRIORIDADE MÁXIMA — CANAL RESTRITO / RECEPÇÃO: Se a última mensagem do contato '
+        'disser que este número/canal é exclusivo para pacientes, clientes, agendamentos ou '
+        'atendimento da clínica/empresa, que não atende esse tipo de assunto comercial por ali, '
+        'ou pedir para contatar outro número/e-mail/setor: NÃO envie mensagem de texto nem despedida. '
+        'CHAME OBRIGATORIAMENTE a ferramenta alertar_canal_inadequado.\n'
+        '2. PRIORIDADE ALTA — INTERESSE COMERCIAL: Nunca invente preços fechados. Se o cliente '
+        'pedir valores, orçamento, proposta ou reunião, CHAME OBRIGATORIAMENTE a ferramenta '
+        'transferir_para_humano.\n'
+        '3. RESPOSTA NORMAL: Somente se nenhum dos dois casos acima ocorrer, responda em '
+        'português do Brasil de forma natural e curta (máximo 3 frases).'
     )
 
 
@@ -101,7 +155,7 @@ def _build_gemini_contents(history: list[Message]) -> list[genai_types.Content]:
 
 
 class AiSdrService:
-    """SDR intelligence powered by OpenAI (gpt-4o-mini) or Google Gemini (gemini-2.5-flash) with Function Calling."""
+    """SDR intelligence powered by OpenAI or Google Gemini with Function Calling."""
 
     async def evaluate_conversation(
         self,
@@ -156,7 +210,7 @@ class AiSdrService:
         response = await client.chat.completions.create(
             model=model,
             messages=messages,  # type: ignore[arg-type]
-            tools=[HANDOFF_TOOL_SCHEMA],  # type: ignore[list-item]
+            tools=[HANDOFF_TOOL_SCHEMA, WRONG_CHANNEL_TOOL_SCHEMA],  # type: ignore[list-item]
             tool_choice='auto',
             temperature=0.4,
             max_tokens=260,
@@ -165,8 +219,8 @@ class AiSdrService:
         choice = response.choices[0].message
         if choice.tool_calls:
             for tool_call in choice.tool_calls:
+                args = json.loads(tool_call.function.arguments or '{}')
                 if tool_call.function.name == 'transferir_para_humano':
-                    args = json.loads(tool_call.function.arguments or '{}')
                     return AiDecision(
                         action='handoff',
                         handoff_summary=args.get(
@@ -174,6 +228,18 @@ class AiSdrService:
                             'Lead demonstrou interesse comercial e solicitou atendimento.',
                         ),
                         reason=args.get('motivo', 'interesse_detectado'),
+                        provider_used='openai',
+                        model_used=model,
+                    )
+                if tool_call.function.name == 'alertar_canal_inadequado':
+                    return AiDecision(
+                        action='wrong_channel',
+                        handoff_summary=args.get(
+                            'resumo_contexto',
+                            'Canal informou que não atende demandas comerciais por este número.',
+                        ),
+                        reason='canal_inadequado',
+                        alternative_channel=args.get('canal_alternativo') or None,
                         provider_used='openai',
                         model_used=model,
                     )
@@ -223,6 +289,25 @@ class AiSdrService:
             ),
         )
 
+        wrong_channel_declaration = genai_types.FunctionDeclaration(
+            name='alertar_canal_inadequado',
+            description=WRONG_CHANNEL_TOOL_SCHEMA['function']['description'],
+            parameters=genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={
+                    'resumo_contexto': genai_types.Schema(
+                        type=genai_types.Type.STRING,
+                        description='Resumo curto do que a recepção/bot informou sobre este número.',
+                    ),
+                    'canal_alternativo': genai_types.Schema(
+                        type=genai_types.Type.STRING,
+                        description='Outro canal, e-mail, número ou responsável informado (ou "Não informado").',
+                    ),
+                },
+                required=['resumo_contexto'],
+            ),
+        )
+
         contents = _build_gemini_contents(history)
         candidate_models: list[str] = []
         for m in (model, fallback_model, 'gemini-3.8-flash'):
@@ -241,7 +326,10 @@ class AiSdrService:
                         'system_instruction': system_prompt,
                         'tools': [
                             genai_types.Tool(
-                                function_declarations=[handoff_declaration]
+                                function_declarations=[
+                                    handoff_declaration,
+                                    wrong_channel_declaration,
+                                ]
                             )
                         ],
                         'temperature': 0.4,
@@ -311,8 +399,8 @@ class AiSdrService:
 
         if response.function_calls:
             for fn in response.function_calls:
+                args = fn.args or {}
                 if fn.name == 'transferir_para_humano':
-                    args = fn.args or {}
                     return AiDecision(
                         action='handoff',
                         handoff_summary=str(
@@ -322,6 +410,21 @@ class AiSdrService:
                             )
                         ),
                         reason=str(args.get('motivo', 'interesse_detectado')),
+                        provider_used='gemini',
+                        model_used=used_model,
+                    )
+                if fn.name == 'alertar_canal_inadequado':
+                    alt = str(args.get('canal_alternativo') or '').strip()
+                    return AiDecision(
+                        action='wrong_channel',
+                        handoff_summary=str(
+                            args.get(
+                                'resumo_contexto',
+                                'Contato informou que este número não trata demandas comerciais.',
+                            )
+                        ),
+                        reason='canal_inadequado',
+                        alternative_channel=alt or None,
                         provider_used='gemini',
                         model_used=used_model,
                     )
@@ -344,6 +447,19 @@ class AiSdrService:
         last_lead_text = next(
             (m.text.lower() for m in reversed(history) if m.sender == 'lead'), ''
         )
+        if any(phrase in last_lead_text for phrase in WRONG_CHANNEL_HEURISTIC_PHRASES):
+            return AiDecision(
+                action='wrong_channel',
+                handoff_summary=(
+                    f'A recepção/bot de {lead.company_name} informou que este WhatsApp '
+                    f'não atende demandas comerciais.'
+                ),
+                reason='canal_inadequado',
+                alternative_channel='Não informado',
+                provider_used='offline_heuristic',
+                model_used='heuristic',
+            )
+
         triggers = [t.strip().lower() for t in brain.handoff_triggers.split(',') if t.strip()]
         if any(trigger in last_lead_text for trigger in triggers):
             return AiDecision(
