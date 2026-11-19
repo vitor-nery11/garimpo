@@ -40,3 +40,30 @@ class WhatsAppStatusOut(BaseModel):
 
 class TestAlertRequest(BaseModel):
     phone: str = Field(..., min_length=8, max_length=32)
+
+
+class BrainTestMessage(BaseModel):
+    sender: Literal['lead', 'ai']
+    text: str = Field(..., min_length=1, max_length=4096)
+
+
+class BrainTestChatRequest(BaseModel):
+    company_name: str = Field(default='Clínica Odonto Sorriso Vivo', min_length=1, max_length=255)
+    niche: str = Field(default='Clínica Odontológica', min_length=1, max_length=120)
+    city: str = Field(default='São Paulo', min_length=1, max_length=120)
+    neighborhood: str = Field(default='Centro', max_length=120)
+    diagnostic: Literal['sem_site', 'so_instagram', 'possui_site'] = 'so_instagram'
+    persona_prompt: str = Field(..., min_length=5)
+    problem_solved: str = Field(..., min_length=5)
+    common_objections: str = ''
+    handoff_triggers: str = ''
+    messages: list[BrainTestMessage] = Field(..., min_length=1)
+
+
+class BrainTestChatResponse(BaseModel):
+    action: Literal['reply', 'handoff']
+    reply_text: str | None = None
+    handoff_summary: str | None = None
+    reason: str | None = None
+    provider_used: str
+    model_used: str

@@ -3,12 +3,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_evolution_service
 from app.db.session import get_db
+from app.models.lead import BrainSettings, Lead, Message
 from app.schemas.settings import (
     BrainConfigSchema,
+    BrainTestChatRequest,
+    BrainTestChatResponse,
     ConnectionConfigSchema,
     TestAlertRequest,
     WhatsAppStatusOut,
 )
+from app.services.ai_sdr_service import AiSdrService
 from app.services.defaults import (
     get_or_create_brain_settings,
     get_or_create_connection_settings,
@@ -141,3 +145,59 @@ async def send_test_alert(
         )
 
     return {'sent': True, 'phone': clean_phone}
+
+
+@router.post('/settings/brain/test-chat', response_model=BrainTestChatResponse)
+async def test_brain_chat(
+    payload: BrainTestChatRequest,
+    db: AsyncSession = Depends(get_db),
+) -> BrainTestChatResponse:
+    conn = await get_or_create_connection_settings(db)
+
+    simulated_lead = Lead(
+        id='sim-lead',
+        company_name=payload.company_name,
+        niche=payload.niche,
+        city=payload.city,
+        neighborhood=payload.neighborhood,
+        phone='5500000000000',
+        diagnostic=payload.diagnostic,
+        stage='em_conversa_ia',
+        ai_active=True,
+    )
+    simulated_brain = BrainSettings(
+        id=1,
+        persona_prompt=payload.persona_prompt,
+        problem_solved=payload.problem_solved,
+        common_objections=payload.common_objections,
+        handoff_triggers=payload.handoff_triggers,
+        templates=[],
+    )
+    history = [
+        Message(id=f'sim-{idx}', lead_id='sim-lead', sender=m.sender, text=m.text)
+        for idx, m in enumerate(payload.messages)
+    ]
+
+    ai_service = AiSdrService()
+    try:
+        decision = await ai_service.evaluate_conversation(
+            lead=simulated_lead,
+            history=history,
+            brain=simulated_brain,
+            provider=conn.ai_provider,
+            api_key=conn.ai_api_key,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f'Erro ao consultar a IA ({conn.ai_provider}): {exc}',
+        ) from exc
+
+    return BrainTestChatResponse(
+        action=decision.action,
+        reply_text=decision.reply_text,
+        handoff_summary=decision.handoff_summary,
+        reason=decision.reason,
+        provider_used=decision.provider_used,
+        model_used=decision.model_used,
+    )

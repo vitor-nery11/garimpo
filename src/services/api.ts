@@ -382,4 +382,32 @@ export const garimpoApi = {
       method: 'POST',
       body: JSON.stringify({ phone }),
     }),
+
+  testBrainChat: (payload: {
+    company_name: string;
+    niche: string;
+    city: string;
+    neighborhood?: string;
+    diagnostic: SiteDiagnostic;
+    persona_prompt: string;
+    problem_solved: string;
+    common_objections: string;
+    handoff_triggers: string;
+    messages: Array<{ sender: 'lead' | 'ai'; text: string }>;
+  }) =>
+    request<{
+      action: 'reply' | 'handoff';
+      reply_text: string | null;
+      handoff_summary: string | null;
+      reason: string | null;
+      provider_used: string;
+      model_used: string;
+    }>(
+      '/settings/brain/test-chat',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      30000
+    ),
 };

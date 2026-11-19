@@ -255,3 +255,56 @@ async def test_send_test_alert_endpoint(test_env):
         assert r.status_code == 200
         assert r.json() == {'sent': True, 'phone': '5573988323477'}
         evolution_mock.send_text_message.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_brain_test_chat_endpoint(test_env):
+    app = test_env['app']
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        # Normal objection reply (heuristic when offline without API key)
+        r1 = await client.post(
+            '/api/v1/settings/brain/test-chat',
+            json={
+                'company_name': 'Clínica Sorriso',
+                'niche': 'Clínica Odontológica',
+                'city': 'Salvador',
+                'diagnostic': 'so_instagram',
+                'persona_prompt': 'Consultor educado e objetivo.',
+                'problem_solved': 'Sites focados em agendamento pelo Google.',
+                'common_objections': 'Já tenho Instagram',
+                'handoff_triggers': 'preço, orçamento, quanto custa',
+                'messages': [
+                    {'sender': 'ai', 'text': 'Olá! Vi a Clínica Sorriso em Salvador.'},
+                    {'sender': 'lead', 'text': 'Oi, já usamos Instagram aqui.'},
+                ],
+            },
+        )
+        assert r1.status_code == 200
+        data1 = r1.json()
+        assert data1['action'] == 'reply'
+        assert data1['reply_text']
+
+        # Handoff trigger test
+        r2 = await client.post(
+            '/api/v1/settings/brain/test-chat',
+            json={
+                'company_name': 'Clínica Sorriso',
+                'niche': 'Clínica Odontológica',
+                'city': 'Salvador',
+                'diagnostic': 'so_instagram',
+                'persona_prompt': 'Consultor educado e objetivo.',
+                'problem_solved': 'Sites focados em agendamento pelo Google.',
+                'common_objections': '',
+                'handoff_triggers': 'preço, orçamento, quanto custa',
+                'messages': [
+                    {'sender': 'ai', 'text': 'Olá! Vi a Clínica Sorriso em Salvador.'},
+                    {'sender': 'lead', 'text': 'Interessante, quanto custa um orçamento?'},
+                ],
+            },
+        )
+        assert r2.status_code == 200
+        data2 = r2.json()
+        assert data2['action'] == 'handoff'
+        assert data2['handoff_summary']

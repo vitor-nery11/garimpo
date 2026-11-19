@@ -3,12 +3,14 @@ import {
   BrainCircuit,
   Clock,
   Flame,
+  MessageSquareCode,
   Plus,
   Save,
   ShieldCheck,
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import { BrainTestChatModal } from '../components/BrainTestChatModal';
 import { useGarimpo } from '../context/GarimpoContext';
 import type { BrainConfig } from '../types/garimpo';
 
@@ -17,6 +19,7 @@ const TEMPLATE_VARIABLES = ['{nome_empresa}', '{cidade}', '{nicho}'] as const;
 export function BrainPage() {
   const { brainConfig, updateBrainConfig } = useGarimpo();
   const [form, setForm] = useState<BrainConfig>(brainConfig);
+  const [testModalOpen, setTestModalOpen] = useState(false);
   const [focusedTemplateId, setFocusedTemplateId] = useState<string>(
     brainConfig.templates[0]?.id ?? ''
   );
@@ -104,26 +107,38 @@ export function BrainPage() {
     .replaceAll('{nicho}', 'Clínica Odontológica');
 
   return (
-    <form onSubmit={handleSave} className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white">
-            Cérebro da IA & Cadência
-          </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            Ajuste o discurso comercial, modelos de abertura e travas anti-ban para proteger seu chip.
-          </p>
-        </div>
+    <>
+      <form onSubmit={handleSave} className="space-y-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-white">
+              Cérebro da IA & Cadência
+            </h2>
+            <p className="text-sm text-slate-400 mt-1">
+              Ajuste o discurso comercial, modelos de abertura e travas anti-ban para proteger seu chip.
+            </p>
+          </div>
 
-        <button
-          type="submit"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm transition cursor-pointer shadow-lg self-start sm:self-auto"
-        >
-          <Save className="w-4 h-4" />
-          Salvar Configurações
-        </button>
-      </div>
+          <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setTestModalOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-500/15 hover:bg-violet-500/25 text-violet-200 border border-violet-500/40 font-semibold text-sm transition cursor-pointer shadow-sm"
+            >
+              <MessageSquareCode className="w-4 h-4 text-violet-300" />
+              Testar Modelo
+            </button>
+
+            <button
+              type="submit"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm transition cursor-pointer shadow-lg"
+            >
+              <Save className="w-4 h-4" />
+              Salvar Configurações
+            </button>
+          </div>
+        </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         {/* Left: Editor de Prompt / Persona */}
@@ -378,6 +393,13 @@ export function BrainPage() {
           </div>
         </div>
       </div>
-    </form>
+      </form>
+
+      <BrainTestChatModal
+        open={testModalOpen}
+        onClose={() => setTestModalOpen(false)}
+        brain={form}
+      />
+    </>
   );
 }

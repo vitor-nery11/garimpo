@@ -16,6 +16,8 @@ class AiDecision:
     reply_text: str | None = None
     handoff_summary: str | None = None
     reason: str | None = None
+    provider_used: str = 'offline_heuristic'
+    model_used: str = 'heuristic'
 
 
 HANDOFF_TOOL_SCHEMA = {
@@ -62,6 +64,36 @@ def build_system_prompt(lead: Lead, brain: BrainSettings) -> str:
         '2. Nunca invente preços fechados. Se o cliente pedir valores, orçamento ou reunião, '
         'chame a função transferir_para_humano imediatamente.'
     )
+
+
+def _build_gemini_contents(history: list[Message]) -> list[genai_types.Content]:
+    """Build strictly alternating user/model turns for Gemini multiturn chat."""
+    merged: list[tuple[str, list[str]]] = []
+    for msg in history[-15:]:
+        role = 'user' if msg.sender == 'lead' else 'model'
+        if merged and merged[-1][0] == role:
+            merged[-1][1].append(msg.text)
+        else:
+            merged.append((role, [msg.text]))
+
+    if merged and merged[0][0] == 'model':
+        merged.insert(
+            0,
+            (
+                'user',
+                [
+                    '[Início da conversa: você enviou a primeira mensagem de prospecção abaixo para este lead.]'
+                ],
+            ),
+        )
+
+    return [
+        genai_types.Content(
+            role=role,
+            parts=[genai_types.Part.from_text(text='\n'.join(parts))],
+        )
+        for role, parts in merged
+    ]
 
 
 class AiSdrService:
@@ -122,7 +154,7 @@ class AiSdrService:
             tools=[HANDOFF_TOOL_SCHEMA],  # type: ignore[list-item]
             tool_choice='auto',
             temperature=0.4,
-            max_tokens=220,
+            max_tokens=260,
         )
 
         choice = response.choices[0].message
@@ -137,12 +169,16 @@ class AiSdrService:
                             'Lead demonstrou interesse comercial e solicitou atendimento.',
                         ),
                         reason=args.get('motivo', 'interesse_detectado'),
+                        provider_used='openai',
+                        model_used=model,
                     )
 
         return AiDecision(
             action='reply',
             reply_text=(choice.content or '').strip()
             or 'Perfeito! Posso te explicar como funciona em 2 minutinhos?',
+            provider_used='openai',
+            model_used=model,
         )
 
     async def _call_gemini(
@@ -174,13 +210,7 @@ class AiSdrService:
             ),
         )
 
-        contents = [
-            genai_types.Content(
-                role='user' if msg.sender == 'lead' else 'model',
-                parts=[genai_types.Part.from_text(text=msg.text)],
-            )
-            for msg in history[-15:]
-        ]
+        contents = _build_gemini_contents(history)
 
         response = await client.aio.models.generate_content(
             model=model,
@@ -189,7 +219,8 @@ class AiSdrService:
                 system_instruction=system_prompt,
                 tools=[genai_types.Tool(function_declarations=[handoff_declaration])],
                 temperature=0.4,
-                max_output_tokens=220,
+                max_output_tokens=512,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
@@ -206,12 +237,16 @@ class AiSdrService:
                             )
                         ),
                         reason=str(args.get('motivo', 'interesse_detectado')),
+                        provider_used='gemini',
+                        model_used=model,
                     )
 
         return AiDecision(
             action='reply',
             reply_text=(response.text or '').strip()
             or 'Entendi! Posso te mostrar um exemplo prático para o seu segmento?',
+            provider_used='gemini',
+            model_used=model,
         )
 
     def _offline_heuristic(
@@ -233,6 +268,8 @@ class AiSdrService:
                     f'orçamento/fechamento na última mensagem.'
                 ),
                 reason='gatilho_detectado',
+                provider_used='offline_heuristic',
+                model_used='heuristic',
             )
         return AiDecision(
             action='reply',
@@ -241,4 +278,6 @@ class AiSdrService:
                 'focada em aparecer no Google e levar o cliente direto para o WhatsApp. '
                 'Faz sentido te mostrar um exemplo?'
             ),
+            provider_used='offline_heuristic',
+            model_used='heuristic',
         )
