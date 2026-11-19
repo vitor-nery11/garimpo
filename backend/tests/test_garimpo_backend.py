@@ -404,3 +404,95 @@ async def test_brain_test_whatsapp_and_9th_digit_webhook(test_env):
         r_del = await client.delete(f'/api/v1/leads/{lead_id}')
         assert r_del.status_code == 200
         assert r_del.json() == {'deleted': True}
+
+
+@pytest.mark.asyncio
+async def test_lid_remote_jid_alt_and_sync_whatsapp(test_env):
+    app = test_env['app']
+    evolution_mock = test_env['evolution_mock']
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        # Enqueue a clinic lead with 13-digit Bahia phone
+        r_q = await client.post(
+            '/api/v1/prospecting/queue',
+            json={
+                'candidates': [
+                    {
+                        'company_name': 'Clinodonto Itabuna',
+                        'niche': 'Clínica Odontológica',
+                        'city': 'Itabuna',
+                        'neighborhood': 'Centro',
+                        'phone': '5573982081270',
+                        'diagnostic': 'so_instagram',
+                    }
+                ]
+            },
+        )
+        lead_id = r_q.json()['lead_ids'][0]
+
+        # 1. Inbound message arrives with @lid in remoteJid and 12-digit phone in remoteJidAlt
+        r_wh = await client.post(
+            '/api/v1/webhooks/evolution',
+            json={
+                'event': 'messages.upsert',
+                'instance': 'test_instance',
+                'data': {
+                    'key': {
+                        'id': 'lid-msg-1',
+                        'fromMe': False,
+                        'remoteJid': '272696113950827@lid',
+                        'remoteJidAlt': '557382081270@s.whatsapp.net',
+                    },
+                    'message': {'conversation': 'Olá! Sou Ana da Clinodonto.'},
+                },
+            },
+        )
+        assert r_wh.status_code == 200
+        assert r_wh.json()['status'] == 'buffered_for_ai'
+        assert r_wh.json()['lead_id'] == lead_id
+
+        # 2. Manual message typed on user's physical phone (fromMe=True) pauses AI & is recorded as 'user'
+        r_phone = await client.post(
+            '/api/v1/webhooks/evolution',
+            json={
+                'event': 'messages.upsert',
+                'instance': 'test_instance',
+                'data': {
+                    'key': {
+                        'id': 'lid-msg-2',
+                        'fromMe': True,
+                        'remoteJid': '272696113950827@lid',
+                        'remoteJidAlt': '557382081270@s.whatsapp.net',
+                    },
+                    'message': {'conversation': 'Qual o melhor horário para falar?'},
+                },
+            },
+        )
+        assert r_phone.status_code == 200
+        assert r_phone.json()['status'] == 'stored_manual_from_phone'
+
+        # 3. Sync historical missed messages from Evolution API
+        import time
+
+        evolution_mock.fetch_recent_messages.return_value = [
+            {
+                'key': {
+                    'id': 'hist-msg-3',
+                    'fromMe': False,
+                    'remoteJid': '272696113950827@lid',
+                    'remoteJidAlt': '557382081270@s.whatsapp.net',
+                },
+                'message': {'conversation': 'Pode ligar às 15h!'},
+                'messageTimestamp': int(time.time()) + 5,
+            }
+        ]
+        r_sync = await client.post('/api/v1/leads/sync-whatsapp')
+        assert r_sync.status_code == 200
+        assert r_sync.json() == {'synced_messages': 1, 'updated_leads': 1}
+
+        r_lead = await client.get(f'/api/v1/leads/{lead_id}')
+        lead = r_lead.json()
+        assert lead['ai_active'] is False
+        assert len(lead['messages']) == 3
+        assert [m['sender'] for m in lead['messages']] == ['lead', 'user', 'lead']

@@ -173,3 +173,21 @@ class EvolutionService:
                 return resp.status_code in (200, 201)
         except Exception:
             return False
+
+    async def fetch_recent_messages(self, limit: int = 300) -> list[dict]:
+        """Fetch recent WhatsApp message records from Evolution API for history reconciliation."""
+        url = f'{self.base_url}/chat/findMessages/{self.instance}'
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    url, headers=self._headers(), json={'limit': limit}
+                )
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+                if isinstance(data, dict):
+                    records = data.get('messages', {}).get('records', [])
+                    return records if isinstance(records, list) else []
+                return data if isinstance(data, list) else []
+        except Exception:
+            return []

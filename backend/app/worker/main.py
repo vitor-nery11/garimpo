@@ -239,6 +239,7 @@ async def run_worker() -> None:
     redis_service = RedisService.from_settings()
     evolution_service = EvolutionService()
     ai_service = AiSdrService()
+    await evolution_service.ensure_webhook()
     logger.info('Garimpo Worker iniciado (Disparos + Debounce IA).')
     try:
         await asyncio.gather(

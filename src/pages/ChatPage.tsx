@@ -6,6 +6,7 @@ import {
   MapPin,
   MessageSquare,
   Phone,
+  RefreshCw,
   Search,
   Send,
   Sparkles,
@@ -31,11 +32,13 @@ export function ChatPage() {
     toggleLeadAi,
     sendManualMessage,
     moveLeadStage,
+    syncWhatsAppHistory,
   } = useGarimpo();
 
   const [filterTab, setFilterTab] = useState<ChatFilterTab>('precisam_de_mim');
   const [searchQuery, setSearchQuery] = useState('');
   const [draft, setDraft] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Leads that have messages or are active in conversation/handoff
@@ -100,15 +103,36 @@ export function ChatPage() {
     setDraft('');
   };
 
+  const handleSync = async () => {
+    setIsSyncing(true);
+    try {
+      await syncWhatsAppHistory();
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white">
-          Central de Chat (Conversas & Transbordo)
-        </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Audite as abordagens da IA em tempo real e assuma o atendimento com um clique quando o lead esquentar.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-white">
+            Central de Chat (Conversas & Transbordo)
+          </h2>
+          <p className="text-sm text-slate-400 mt-1">
+            Audite as abordagens da IA em tempo real e assuma o atendimento com um clique quando o lead esquentar.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          disabled={isSyncing}
+          onClick={() => void handleSync()}
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 border border-slate-700 text-xs font-semibold text-slate-200 transition cursor-pointer self-start sm:self-auto"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
+          {isSyncing ? 'Sincronizando...' : 'Sincronizar WhatsApp'}
+        </button>
       </div>
 
       {/* 3-pane WhatsApp Web style container */}

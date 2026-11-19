@@ -443,4 +443,11 @@ export const garimpoApi = {
 
   deleteLead: (leadId: string) =>
     request<{ deleted: boolean }>(`/leads/${leadId}`, { method: 'DELETE' }),
+
+  syncWhatsAppHistory: () =>
+    request<{ synced_messages: number; updated_leads: number }>(
+      '/leads/sync-whatsapp',
+      { method: 'POST' },
+      20000
+    ),
 };

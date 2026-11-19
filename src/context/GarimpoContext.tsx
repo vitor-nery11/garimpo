@@ -69,6 +69,7 @@ interface GarimpoContextValue {
   requestWhatsappQrCode: () => Promise<void>;
   refreshWhatsappStatus: () => Promise<void>;
   sendTestAlert: (phone: string) => Promise<void>;
+  syncWhatsAppHistory: () => Promise<void>;
   // Toasts
   toasts: ToastNotification[];
   pushToast: (title: string, description?: string, type?: ToastNotification['type']) => void;
@@ -943,6 +944,34 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     [backendMode, pushToast]
   );
 
+  const syncWhatsAppHistory = useCallback(async () => {
+    if (backendMode !== 'api') {
+      pushToast(
+        'API offline',
+        'Conecte ao backend para sincronizar conversas do WhatsApp.',
+        'warning'
+      );
+      return;
+    }
+    try {
+      const res = await garimpoApi.syncWhatsAppHistory();
+      await syncFromApi(false);
+      pushToast(
+        res.synced_messages > 0
+          ? `${res.synced_messages} mensagem(ns) sincronizada(s)`
+          : 'Conversas já estão atualizadas',
+        res.synced_messages > 0
+          ? `Histórico atualizado em ${res.updated_leads} contato(s).`
+          : 'Nenhuma mensagem pendente encontrada na Evolution API.',
+        res.synced_messages > 0 ? 'success' : 'info'
+      );
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Erro ao sincronizar histórico do WhatsApp.';
+      pushToast('Erro na sincronização', msg, 'warning');
+    }
+  }, [backendMode, syncFromApi, pushToast]);
+
   const value: GarimpoContextValue = {
     backendMode,
     retryApiConnection: () => bootstrapApi(true),
@@ -974,6 +1003,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     requestWhatsappQrCode,
     refreshWhatsappStatus,
     sendTestAlert,
+    syncWhatsAppHistory,
     toasts,
     pushToast,
     dismissToast,
