@@ -203,19 +203,36 @@ class EvolutionService:
             return False
 
     async def fetch_recent_messages(self, limit: int = 300) -> list[dict]:
-        """Fetch recent WhatsApp message records from Evolution API for history reconciliation."""
+        """Fetch recent WhatsApp message records from Evolution API across paginated pages."""
         url = f'{self.base_url}/chat/findMessages/{self.instance}'
+        collected: list[dict] = []
+        page_size = 50
+        max_pages = max(1, (limit + page_size - 1) // page_size)
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    url, headers=self._headers(), json={'limit': limit}
-                )
-                if resp.status_code != 200:
-                    return []
-                data = resp.json()
-                if isinstance(data, dict):
-                    records = data.get('messages', {}).get('records', [])
-                    return records if isinstance(records, list) else []
-                return data if isinstance(data, list) else []
+                for page in range(1, max_pages + 1):
+                    resp = await client.post(
+                        url,
+                        headers=self._headers(),
+                        json={'limit': page_size, 'page': page},
+                    )
+                    if resp.status_code != 200:
+                        break
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        records = data.get('messages', {}).get('records', [])
+                    elif isinstance(data, list):
+                        records = data
+                    else:
+                        records = []
+
+                    if not records:
+                        break
+                    collected.extend(records)
+                    if len(records) < page_size or len(collected) >= limit:
+                        break
         except Exception:
-            return []
+            pass
+
+        return collected[:limit]

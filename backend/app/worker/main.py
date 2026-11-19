@@ -80,6 +80,7 @@ async def process_one_dispatch(
             chosen = templates[sent_today % len(templates)]
             text = render_first_message(chosen.get('content', ''), lead)
 
+            await redis_service.mark_outgoing_message(lead.id, text)
             sent_ok = await evolution_service.send_text_message(lead.phone, text)
             if not sent_ok:
                 logger.warning(
@@ -147,13 +148,37 @@ async def process_ready_debounces(
                 brain = await get_or_create_brain_settings(db)
                 conn = await get_or_create_connection_settings(db)
 
-                decision = await ai_service.evaluate_conversation(
-                    lead=lead,
-                    history=list(lead.messages),
-                    brain=brain,
-                    provider=conn.ai_provider,
-                    api_key=conn.ai_api_key,
-                )
+                try:
+                    decision = await ai_service.evaluate_conversation(
+                        lead=lead,
+                        history=list(lead.messages),
+                        brain=brain,
+                        provider=conn.ai_provider,
+                        api_key=conn.ai_api_key,
+                    )
+                except Exception as exc:
+                    retry_key = f'garimpo:debounce:retries:{lead_id}'
+                    retries = int(await redis_service.client.incr(retry_key))
+                    await redis_service.client.expire(retry_key, 300)
+                    if retries <= 3:
+                        logger.warning(
+                            'Erro ao avaliar IA para %s (tentativa %s/3): %s. Reagendando em 15s.',
+                            lead.company_name,
+                            retries,
+                            exc,
+                        )
+                        await redis_service.push_debounce_message(
+                            lead_id, '\n'.join(buffered), debounce_seconds=15
+                        )
+                    else:
+                        logger.error(
+                            'IA falhou 3x para %s (%s). Desistindo deste turno.',
+                            lead.company_name,
+                            exc,
+                        )
+                    continue
+
+                await redis_service.client.delete(f'garimpo:debounce:retries:{lead_id}')
 
                 now = datetime.now(timezone.utc)
                 if decision.action == 'handoff':
@@ -203,9 +228,30 @@ async def process_ready_debounces(
                         lead.company_name,
                     )
                 elif decision.reply_text:
-                    await evolution_service.send_text_message(
+                    await redis_service.mark_outgoing_message(lead.id, decision.reply_text)
+                    sent_ok = await evolution_service.send_text_message(
                         lead.phone, decision.reply_text
                     )
+                    if not sent_ok:
+                        retry_key = f'garimpo:debounce:retries:{lead_id}'
+                        retries = int(await redis_service.client.incr(retry_key))
+                        await redis_service.client.expire(retry_key, 300)
+                        if retries <= 3:
+                            logger.warning(
+                                'Falha ao enviar resposta da IA via Evolution API para %s (tentativa %s/3). Reagendando em 15s.',
+                                lead.company_name,
+                                retries,
+                            )
+                            await redis_service.push_debounce_message(
+                                lead_id, '\n'.join(buffered), debounce_seconds=15
+                            )
+                        else:
+                            logger.error(
+                                'Falha ao enviar resposta da IA 3x para %s. Desistindo deste turno.',
+                                lead.company_name,
+                            )
+                        continue
+
                     db.add(
                         Message(
                             lead_id=lead.id,

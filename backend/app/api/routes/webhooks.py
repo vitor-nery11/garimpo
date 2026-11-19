@@ -102,6 +102,7 @@ async def handle_evolution_webhook(
     if from_me and (
         text.startswith('🔥 *LEAD QUENTE NO GARIMPO*')
         or text.startswith('⚠️ *CANAL RESTRITO')
+        or text.startswith('✅ *Teste de Alerta — Garimpo*')
     ):
         return {'status': 'ignored', 'reason': 'internal_alert_message'}
 
@@ -120,8 +121,11 @@ async def handle_evolution_webhook(
             return {'status': 'ignored', 'reason': 'duplicate_message'}
 
     # If message was sent fromMe (either by our Worker/API or manually on the user's phone),
-    # avoid duplicating messages already persisted by the API/Worker, and capture manual phone replies.
+    # avoid duplicating messages already persisted/dispatched by the API/Worker, and capture manual phone replies.
     if from_me:
+        if await redis_service.is_marked_outgoing(lead.id, text):
+            return {'status': 'ignored', 'reason': 'already_recorded_outgoing'}
+
         existing_same_text = await db.execute(
             select(Message.id)
             .where(Message.lead_id == lead.id, Message.text == text)

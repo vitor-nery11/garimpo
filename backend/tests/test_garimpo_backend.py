@@ -583,3 +583,149 @@ async def test_wrong_channel_alert_worker_and_test_chat(test_env):
         assert lead['ai_active'] is False
         assert lead['stage'] == 'assumir_conversa'
         assert 'Canal Restrito' in (lead['handoff_summary'] or '')
+
+
+@pytest.mark.asyncio
+async def test_worker_requeues_debounce_on_transient_ai_error(test_env):
+    app = test_env['app']
+    session_factory = test_env['session_factory']
+    redis_service: RedisService = test_env['redis_service']
+    evolution_mock = test_env['evolution_mock']
+    transport = ASGITransport(app=app)
+
+    class FlakyAiService(AiSdrService):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate_conversation(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError('503 UNAVAILABLE: temporary overload')
+            return await super().evaluate_conversation(**kwargs)
+
+    flaky_ai = FlakyAiService()
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        r_q = await client.post(
+            '/api/v1/prospecting/queue',
+            json={
+                'candidates': [
+                    {
+                        'company_name': 'Barbearia Altíssimo',
+                        'niche': 'Barbearia',
+                        'city': 'Itabuna',
+                        'neighborhood': 'Centro',
+                        'phone': '5573991066467',
+                        'diagnostic': 'so_instagram',
+                    }
+                ]
+            },
+        )
+        lead_id = r_q.json()['lead_ids'][0]
+
+        # Generic WhatsApp Business auto-greeting arrives
+        r_wh = await client.post(
+            '/api/v1/webhooks/evolution',
+            json={
+                'event': 'messages.upsert',
+                'instance': 'test_instance',
+                'data': {
+                    'key': {
+                        'id': 'wa-biz-greeting-1',
+                        'fromMe': False,
+                        'remoteJid': '198805848875026@lid',
+                        'remoteJidAlt': '557391066467@s.whatsapp.net',
+                    },
+                    'message': {
+                        'conversation': '\u200eivobarbeiro1812 agradece seu contato. Como podemos ajudar?'
+                    },
+                },
+            },
+        )
+        assert r_wh.status_code == 200
+        assert r_wh.json()['status'] == 'buffered_for_ai'
+
+        # 1st attempt fails transiently -> worker must re-queue instead of dropping the reply
+        await redis_service.client.set(f'garimpo:debounce:until:{lead_id}', '0')
+        processed_first = await process_ready_debounces(
+            session_factory=session_factory,
+            redis_service=redis_service,
+            evolution_service=evolution_mock,
+            ai_service=flaky_ai,
+        )
+        assert processed_first == 0
+        assert flaky_ai.calls == 1
+
+        # Lead must still be pending in debounce set for automatic retry
+        pending = await redis_service.client.smembers('garimpo:debounce:pending_leads')
+        assert lead_id in pending
+
+        # 2nd attempt succeeds -> replies normally (does NOT trigger wrong_channel)
+        await redis_service.client.set(f'garimpo:debounce:until:{lead_id}', '0')
+        processed_second = await process_ready_debounces(
+            session_factory=session_factory,
+            redis_service=redis_service,
+            evolution_service=evolution_mock,
+            ai_service=flaky_ai,
+        )
+        assert processed_second == 1
+        assert flaky_ai.calls == 2
+
+        r_lead = await client.get(f'/api/v1/leads/{lead_id}')
+        lead = r_lead.json()
+        assert lead['ai_active'] is True
+        assert lead['stage'] == 'em_conversa_ia'
+        assert any(m['sender'] == 'ai' for m in lead['messages'])
+
+
+@pytest.mark.asyncio
+async def test_from_me_echo_race_condition_does_not_disable_ai(test_env):
+    app = test_env['app']
+    redis_service: RedisService = test_env['redis_service']
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        r_q = await client.post(
+            '/api/v1/prospecting/queue',
+            json={
+                'candidates': [
+                    {
+                        'company_name': 'Barbearia Race Guard',
+                        'niche': 'Barbearia',
+                        'city': 'Itabuna',
+                        'neighborhood': 'Centro',
+                        'phone': '5573991112222',
+                        'diagnostic': 'so_instagram',
+                    }
+                ]
+            },
+        )
+        lead_id = r_q.json()['lead_ids'][0]
+
+        outgoing_text = 'Olá! Vi a Barbearia Race Guard em Itabuna.'
+        # Worker marks outgoing message in Redis BEFORE sendText (and before DB commit)
+        await redis_service.mark_outgoing_message(lead_id, outgoing_text)
+
+        # Evolution fires fromMe webhook BEFORE the DB row exists
+        r_wh = await client.post(
+            '/api/v1/webhooks/evolution',
+            json={
+                'event': 'messages.upsert',
+                'instance': 'test_instance',
+                'data': {
+                    'key': {
+                        'id': 'race-echo-1',
+                        'fromMe': True,
+                        'remoteJid': '557391112222@s.whatsapp.net',
+                    },
+                    'message': {'conversation': outgoing_text},
+                },
+            },
+        )
+        assert r_wh.status_code == 200
+        assert r_wh.json() == {'status': 'ignored', 'reason': 'already_recorded_outgoing'}
+
+        # AI must remain active!
+        r_lead = await client.get(f'/api/v1/leads/{lead_id}')
+        assert r_lead.json()['ai_active'] is True
+

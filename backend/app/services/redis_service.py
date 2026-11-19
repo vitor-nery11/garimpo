@@ -1,3 +1,4 @@
+import hashlib
 import time
 import uuid
 from datetime import datetime
@@ -14,6 +15,7 @@ DEBOUNCE_PENDING_SET = 'garimpo:debounce:pending_leads'
 DEBOUNCE_BUFFER_PREFIX = 'garimpo:debounce:buffer:'
 DEBOUNCE_UNTIL_PREFIX = 'garimpo:debounce:until:'
 LOCK_PREFIX = 'garimpo:lock:lead:'
+OUTGOING_MARKER_PREFIX = 'garimpo:outgoing:'
 
 
 class RedisService:
@@ -134,3 +136,19 @@ class RedisService:
         current = await self.client.get(key)
         if current == token:
             await self.client.delete(key)
+
+    # ------------------------------------------------------------------
+    # 4. Marcador de mensagens enviadas pela plataforma (evita race condition com webhook fromMe)
+    # ------------------------------------------------------------------
+    def _outgoing_key(self, lead_id: str, text: str) -> str:
+        digest = hashlib.sha256(f'{lead_id}:{text.strip()}'.encode('utf-8')).hexdigest()[:24]
+        return f'{OUTGOING_MARKER_PREFIX}{digest}'
+
+    async def mark_outgoing_message(
+        self, lead_id: str, text: str, ttl_seconds: int = 120
+    ) -> None:
+        await self.client.set(self._outgoing_key(lead_id, text), '1', ex=ttl_seconds)
+
+    async def is_marked_outgoing(self, lead_id: str, text: str) -> bool:
+        return bool(await self.client.exists(self._outgoing_key(lead_id, text)))
+

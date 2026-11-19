@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_evolution_service
+from app.api.deps import get_evolution_service, get_redis_service
 from app.db.session import get_db
 from app.models.lead import BrainSettings, Lead, Message
 from app.schemas.settings import (
@@ -27,6 +27,7 @@ from app.services.prospecting_service import (
     brazil_phone_variants,
     normalize_brazil_phone,
 )
+from app.services.redis_service import RedisService
 
 router = APIRouter(tags=['Configurações & Conexões'])
 
@@ -217,6 +218,7 @@ async def test_brain_whatsapp(
     payload: BrainTestWhatsAppRequest,
     db: AsyncSession = Depends(get_db),
     evolution_service: EvolutionService = Depends(get_evolution_service),
+    redis_service: RedisService = Depends(get_redis_service),
 ) -> BrainTestWhatsAppResponse:
     conn = await get_or_create_connection_settings(db)
     brain = await get_or_create_brain_settings(db)
@@ -289,6 +291,7 @@ async def test_brain_whatsapp(
             .replace('{nicho}', lead.niche)
         )
 
+    await redis_service.mark_outgoing_message(lead.id, opening)
     sent = await evolution_service.send_text_message(clean_phone, opening)
     if not sent:
         await db.rollback()

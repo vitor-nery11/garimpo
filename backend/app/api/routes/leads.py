@@ -96,6 +96,7 @@ async def sync_whatsapp_messages(
         if from_me and (
             text.startswith('🔥 *LEAD QUENTE NO GARIMPO*')
             or text.startswith('⚠️ *CANAL RESTRITO')
+            or text.startswith('✅ *Teste de Alerta — Garimpo*')
         ):
             continue
 
@@ -132,6 +133,8 @@ async def sync_whatsapp_messages(
         )
         if lead_last is None or msg_dt > lead_last:
             lead.last_message_at = msg_dt
+            if sender == 'user':
+                lead.ai_active = False
         if sender == 'lead' and lead.stage in ('na_fila', 'abordado') and lead.ai_active:
             lead.stage = 'em_conversa_ia'
 
@@ -209,6 +212,7 @@ async def send_manual_message(
     lead = await _get_lead_or_404(db, lead_id)
 
     # Disparo via Evolution API (best-effort; registra histórico mesmo em modo offline)
+    await redis_service.mark_outgoing_message(lead.id, payload.text)
     await evolution_service.send_text_message(lead.phone, payload.text)
 
     now = datetime.now(timezone.utc)

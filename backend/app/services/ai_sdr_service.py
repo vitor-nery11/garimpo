@@ -57,10 +57,11 @@ WRONG_CHANNEL_TOOL_SCHEMA = {
     'function': {
         'name': 'alertar_canal_inadequado',
         'description': (
-            'CHAME ESTA FUNÇÃO (sem enviar texto ao cliente) sempre que a mensagem indicar que '
-            'este WhatsApp não trata demandas comerciais/parcerias, é exclusivo para pacientes, '
-            'agendamentos ou atendimento da clínica/loja, ou quando um robô/recepção recusar o assunto '
-            'ou indicar outro canal/e-mail/responsável.'
+            'CHAME ESTA FUNÇÃO (sem enviar texto ao cliente) APENAS quando a mensagem RECUSAR '
+            'explicitamente demandas comerciais/parcerias ou afirmar que este WhatsApp é EXCLUSIVO '
+            'para pacientes, agendamentos ou atendimento da clínica/loja, ou indicar outro e-mail/número '
+            'para assuntos comerciais. NÃO chame para saudações genéricas automáticas do WhatsApp Business '
+            'como "agradece seu contato. Como podemos ajudar?" ou "Seja bem-vindo, qual seu nome?".'
         ),
         'parameters': {
             'type': 'object',
@@ -111,16 +112,19 @@ def build_system_prompt(lead: Lead, brain: BrainSettings) -> str:
         f'- Cidade: {lead.city} ({lead.neighborhood})\n'
         f'- Diagnóstico do Site: {lead.diagnostic}\n\n'
         'REGRAS DE DECISÃO (SIGA ESTA ORDEM DE PRIORIDADE):\n'
-        '1. PRIORIDADE MÁXIMA — CANAL RESTRITO / RECEPÇÃO: Se a última mensagem do contato '
-        'disser que este número/canal é exclusivo para pacientes, clientes, agendamentos ou '
-        'atendimento da clínica/empresa, que não atende esse tipo de assunto comercial por ali, '
-        'ou pedir para contatar outro número/e-mail/setor: NÃO envie mensagem de texto nem despedida. '
-        'CHAME OBRIGATORIAMENTE a ferramenta alertar_canal_inadequado.\n'
+        '1. PRIORIDADE MÁXIMA — CANAL RESTRITO / RECUSA DE CANAL: Somente se a mensagem '
+        'RECUSAR explicitamente demandas comerciais ou afirmar que o WhatsApp é EXCLUSIVO '
+        'para pacientes/clientes/agendamentos ou pedir para enviar para outro e-mail/número: '
+        'NÃO envie texto e CHAME alertar_canal_inadequado.\n'
+        '   IMPORTANTE: Saudações automáticas genéricas do WhatsApp Business como '
+        '"Fulano agradece seu contato. Como podemos ajudar?" ou "Olá, seja bem-vindo!" '
+        'NÃO são canal restrito — nesses casos, responda normalmente (regra 3) reforçando '
+        'de forma breve o motivo do contato!\n'
         '2. PRIORIDADE ALTA — INTERESSE COMERCIAL: Nunca invente preços fechados. Se o cliente '
         'pedir valores, orçamento, proposta ou reunião, CHAME OBRIGATORIAMENTE a ferramenta '
         'transferir_para_humano.\n'
-        '3. RESPOSTA NORMAL: Somente se nenhum dos dois casos acima ocorrer, responda em '
-        'português do Brasil de forma natural e curta (máximo 3 frases).'
+        '3. RESPOSTA NORMAL: Para qualquer outra resposta (incluindo saudações automáticas '
+        '"como podemos ajudar?"), responda em português do Brasil de forma natural e curta (máximo 3 frases).'
     )
 
 
