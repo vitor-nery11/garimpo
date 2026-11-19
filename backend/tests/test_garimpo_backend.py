@@ -350,3 +350,57 @@ async def test_gemini_fallback_on_503(monkeypatch):
         'gemini-3.5-flash-lite',
         'gemini-3.1-flash-lite',
     ]
+
+
+@pytest.mark.asyncio
+async def test_brain_test_whatsapp_and_9th_digit_webhook(test_env):
+    app = test_env['app']
+    evolution_mock = test_env['evolution_mock']
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        r_start = await client.post(
+            '/api/v1/settings/brain/test-whatsapp',
+            json={
+                'company_name': 'Clínica Teste WhatsApp',
+                'niche': 'Clínica Odontológica',
+                'city': 'Itabuna',
+                'diagnostic': 'so_instagram',
+                'persona_prompt': 'Consultor educado e objetivo.',
+                'problem_solved': 'Sites focados em agendamento pelo Google.',
+                'common_objections': '',
+                'handoff_triggers': 'preço, orçamento',
+            },
+        )
+        assert r_start.status_code == 200
+        start_data = r_start.json()
+        assert start_data['sent'] is True
+        assert start_data['phone'] == '5573988323477'
+        lead_id = start_data['lead_id']
+        evolution_mock.ensure_webhook.assert_awaited()
+        evolution_mock.send_text_message.assert_awaited()
+
+        # Inbound reply arrives from WhatsApp WITHOUT the 9th digit (Bahia JID format)
+        r_wh = await client.post(
+            '/api/v1/webhooks/evolution',
+            json={
+                'event': 'messages.upsert',
+                'instance': 'test_instance',
+                'data': {
+                    'key': {
+                        'id': 'wa-9digit-msg-1',
+                        'fromMe': False,
+                        'remoteJid': '557388323477@s.whatsapp.net',
+                    },
+                    'message': {'conversation': 'Oi! Recebi sua mensagem no meu celular!'},
+                },
+            },
+        )
+        assert r_wh.status_code == 200
+        assert r_wh.json()['status'] == 'buffered_for_ai'
+        assert r_wh.json()['lead_id'] == lead_id
+
+        # Cleanup test lead
+        r_del = await client.delete(f'/api/v1/leads/{lead_id}')
+        assert r_del.status_code == 200
+        assert r_del.json() == {'deleted': True}

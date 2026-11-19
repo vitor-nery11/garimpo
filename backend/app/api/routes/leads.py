@@ -51,6 +51,14 @@ async def get_lead(lead_id: str, db: AsyncSession = Depends(get_db)) -> LeadOut:
     return await _get_lead_or_404(db, lead_id)  # type: ignore[return-value]
 
 
+@router.delete('/{lead_id}', response_model=dict[str, bool])
+async def delete_lead(lead_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+    lead = await _get_lead_or_404(db, lead_id)
+    await db.delete(lead)
+    await db.commit()
+    return {'deleted': True}
+
+
 @router.patch('/{lead_id}/stage', response_model=LeadOut)
 async def update_lead_stage(
     lead_id: str,

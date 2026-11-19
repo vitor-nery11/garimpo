@@ -67,3 +67,24 @@ class BrainTestChatResponse(BaseModel):
     reason: str | None = None
     provider_used: str
     model_used: str
+
+
+class BrainTestWhatsAppRequest(BaseModel):
+    phone: str | None = None
+    company_name: str = Field(default='Clínica Odonto Sorriso Vivo', min_length=1, max_length=255)
+    niche: str = Field(default='Clínica Odontológica', min_length=1, max_length=120)
+    city: str = Field(default='São Paulo', min_length=1, max_length=120)
+    neighborhood: str = Field(default='Centro', max_length=120)
+    diagnostic: Literal['sem_site', 'so_instagram', 'possui_site'] = 'so_instagram'
+    persona_prompt: str = Field(..., min_length=5)
+    problem_solved: str = Field(..., min_length=5)
+    common_objections: str = ''
+    handoff_triggers: str = ''
+    opening_message: str | None = None
+
+
+class BrainTestWhatsAppResponse(BaseModel):
+    sent: bool
+    lead_id: str
+    phone: str
+    opening_message: str

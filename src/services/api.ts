@@ -417,4 +417,30 @@ export const garimpoApi = {
       },
       45000
     ),
+
+  testBrainWhatsApp: (payload: {
+    phone?: string;
+    company_name: string;
+    niche: string;
+    city: string;
+    neighborhood?: string;
+    diagnostic: SiteDiagnostic;
+    persona_prompt: string;
+    problem_solved: string;
+    common_objections: string;
+    handoff_triggers: string;
+    opening_message?: string;
+  }) =>
+    request<{
+      sent: boolean;
+      lead_id: string;
+      phone: string;
+      opening_message: string;
+    }>('/settings/brain/test-whatsapp', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteLead: (leadId: string) =>
+    request<{ deleted: boolean }>(`/leads/${leadId}`, { method: 'DELETE' }),
 };

@@ -152,3 +152,24 @@ class EvolutionService:
             f'A IA foi pausada automaticamente para você assumir.'
         )
         return await self.send_text_message(clean_alert, message)
+
+    async def ensure_webhook(
+        self, webhook_url: str = 'http://api:8000/api/v1/webhooks/evolution'
+    ) -> bool:
+        """Ensure Evolution API instance forwards inbound WhatsApp messages to FastAPI."""
+        url = f'{self.base_url}/webhook/set/{self.instance}'
+        payload = {
+            'webhook': {
+                'enabled': True,
+                'url': webhook_url,
+                'webhookByEvents': False,
+                'webhookBase64': False,
+                'events': ['MESSAGES_UPSERT'],
+            }
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(url, headers=self._headers(), json=payload)
+                return resp.status_code in (200, 201)
+        except Exception:
+            return False

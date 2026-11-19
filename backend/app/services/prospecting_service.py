@@ -61,6 +61,26 @@ def normalize_brazil_phone(raw_phone: str | None) -> str:
     return digits
 
 
+def brazil_phone_variants(raw_phone: str | None) -> list[str]:
+    """Return both 12-digit and 13-digit Brazilian WhatsApp variants (with/without 9th digit)."""
+    clean = normalize_brazil_phone(raw_phone)
+    if not clean:
+        return []
+    variants = [clean]
+    if clean.startswith('55'):
+        ddd = clean[2:4]
+        subscriber = clean[4:]
+        if len(subscriber) == 9 and subscriber.startswith('9'):
+            without_nine = f'55{ddd}{subscriber[1:]}'
+            if without_nine not in variants:
+                variants.append(without_nine)
+        elif len(subscriber) == 8:
+            with_nine = f'55{ddd}9{subscriber}'
+            if with_nine not in variants:
+                variants.append(with_nine)
+    return variants
+
+
 def _extract_neighborhood_from_address(address: str) -> str:
     if not address:
         return ''

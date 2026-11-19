@@ -1,4 +1,7 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_evolution_service
@@ -8,6 +11,8 @@ from app.schemas.settings import (
     BrainConfigSchema,
     BrainTestChatRequest,
     BrainTestChatResponse,
+    BrainTestWhatsAppRequest,
+    BrainTestWhatsAppResponse,
     ConnectionConfigSchema,
     TestAlertRequest,
     WhatsAppStatusOut,
@@ -18,7 +23,10 @@ from app.services.defaults import (
     get_or_create_connection_settings,
 )
 from app.services.evolution_service import EvolutionService
-from app.services.prospecting_service import normalize_brazil_phone
+from app.services.prospecting_service import (
+    brazil_phone_variants,
+    normalize_brazil_phone,
+)
 
 router = APIRouter(tags=['Configurações & Conexões'])
 
@@ -200,4 +208,100 @@ async def test_brain_chat(
         reason=decision.reason,
         provider_used=decision.provider_used,
         model_used=decision.model_used,
+    )
+
+
+@router.post('/settings/brain/test-whatsapp', response_model=BrainTestWhatsAppResponse)
+async def test_brain_whatsapp(
+    payload: BrainTestWhatsAppRequest,
+    db: AsyncSession = Depends(get_db),
+    evolution_service: EvolutionService = Depends(get_evolution_service),
+) -> BrainTestWhatsAppResponse:
+    conn = await get_or_create_connection_settings(db)
+    brain = await get_or_create_brain_settings(db)
+
+    raw_target = (payload.phone or '').strip() or conn.alert_phone
+    clean_phone = normalize_brazil_phone(raw_target)
+    if len(clean_phone) < 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Cadastre um Telefone de Alerta válido em Conexões & Alertas antes de testar no WhatsApp.',
+        )
+
+    wa_status = await evolution_service.get_connection_state()
+    if not wa_status.connected:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='WhatsApp de prospecção não está conectado. Pareie via QR Code em Conexões & Alertas.',
+        )
+
+    # Ensure Evolution API forwards inbound replies from this test chat to FastAPI
+    await evolution_service.ensure_webhook()
+
+    # Sync current editor prompt into BrainSettings so the Worker replies using it
+    brain.persona_prompt = payload.persona_prompt
+    brain.problem_solved = payload.problem_solved
+    brain.common_objections = payload.common_objections
+    brain.handoff_triggers = payload.handoff_triggers
+
+    variants = brazil_phone_variants(clean_phone)
+    existing_res = await db.execute(select(Lead).where(Lead.phone.in_(variants)))
+    lead = existing_res.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+
+    if lead is not None:
+        await db.execute(delete(Message).where(Message.lead_id == lead.id))
+        lead.company_name = payload.company_name
+        lead.niche = payload.niche
+        lead.city = payload.city
+        lead.neighborhood = payload.neighborhood
+        lead.diagnostic = payload.diagnostic
+        lead.stage = 'abordado'
+        lead.ai_active = True
+        lead.handoff_summary = None
+        lead.last_message_at = now
+    else:
+        lead = Lead(
+            company_name=payload.company_name,
+            niche=payload.niche,
+            city=payload.city,
+            neighborhood=payload.neighborhood,
+            phone=clean_phone,
+            diagnostic=payload.diagnostic,
+            stage='abordado',
+            ai_active=True,
+            last_message_at=now,
+        )
+        db.add(lead)
+        await db.flush()
+
+    opening = (payload.opening_message or '').strip()
+    if not opening:
+        first_tpl = (
+            brain.templates[0].get('content', '')
+            if brain.templates
+            else 'Olá! Vi a {nome_empresa} em {cidade} e notei que vocês atuam com {nicho}. Podemos conversar?'
+        )
+        opening = (
+            first_tpl.replace('{nome_empresa}', lead.company_name)
+            .replace('{cidade}', lead.city)
+            .replace('{nicho}', lead.niche)
+        )
+
+    sent = await evolution_service.send_text_message(clean_phone, opening)
+    if not sent:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail='Evolution API não confirmou o envio da mensagem inicial de teste.',
+        )
+
+    db.add(Message(lead_id=lead.id, sender='ai', text=opening, created_at=now))
+    await db.commit()
+
+    return BrainTestWhatsAppResponse(
+        sent=True,
+        lead_id=lead.id,
+        phone=clean_phone,
+        opening_message=opening,
     )

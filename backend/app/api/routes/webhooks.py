@@ -9,7 +9,10 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.lead import Lead, Message
 from app.schemas.webhook import EvolutionWebhookPayload
-from app.services.prospecting_service import normalize_brazil_phone
+from app.services.prospecting_service import (
+    brazil_phone_variants,
+    normalize_brazil_phone,
+)
 from app.services.redis_service import RedisService
 
 router = APIRouter(prefix='/webhooks', tags=['Webhooks'])
@@ -50,7 +53,8 @@ async def handle_evolution_webhook(
     if not phone or not text:
         return {'status': 'ignored', 'reason': 'empty_phone_or_text'}
 
-    result = await db.execute(select(Lead).where(Lead.phone == phone))
+    phone_candidates = brazil_phone_variants(phone)
+    result = await db.execute(select(Lead).where(Lead.phone.in_(phone_candidates)))
     lead = result.scalar_one_or_none()
     if lead is None:
         return {'status': 'ignored', 'reason': 'unknown_lead'}
