@@ -219,8 +219,7 @@ class AiSdrService:
                 system_instruction=system_prompt,
                 tools=[genai_types.Tool(function_declarations=[handoff_declaration])],
                 temperature=0.4,
-                max_output_tokens=512,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                max_output_tokens=1024,
             ),
         )
 
