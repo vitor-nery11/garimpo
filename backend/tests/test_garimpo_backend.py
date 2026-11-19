@@ -308,3 +308,41 @@ async def test_brain_test_chat_endpoint(test_env):
         data2 = r2.json()
         assert data2['action'] == 'handoff'
         assert data2['handoff_summary']
+
+
+@pytest.mark.asyncio
+async def test_gemini_fallback_on_503(monkeypatch):
+    from types import SimpleNamespace
+    from app.models.lead import Message
+    from app.services import ai_sdr_service
+
+    called_models: list[str] = []
+
+    class FakeModels:
+        async def generate_content(self, *, model, contents, config):
+            called_models.append(model)
+            if model == 'gemini-3.8-flash':
+                raise RuntimeError('503 UNAVAILABLE: high demand')
+            return SimpleNamespace(function_calls=None, text='Resposta pelo fallback!')
+
+    class FakeClient:
+        def __init__(self, api_key: str):
+            self.aio = SimpleNamespace(models=FakeModels())
+
+    async def fast_sleep(_sec: float):
+        return None
+
+    monkeypatch.setattr(ai_sdr_service.genai, 'Client', FakeClient)
+    monkeypatch.setattr(ai_sdr_service.asyncio, 'sleep', fast_sleep)
+
+    svc = AiSdrService()
+    decision = await svc._call_gemini(
+        api_key='fake-key',
+        model='gemini-3.8-flash',
+        fallback_model='gemini-3.1-flash-lite',
+        system_prompt='Prompt',
+        history=[Message(id='m1', lead_id='l1', sender='lead', text='Oi')],
+    )
+    assert decision.action == 'reply'
+    assert decision.model_used == 'gemini-3.1-flash-lite'
+    assert called_models == ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite']

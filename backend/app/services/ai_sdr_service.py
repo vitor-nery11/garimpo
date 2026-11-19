@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -8,6 +10,8 @@ from openai import AsyncOpenAI
 
 from app.core.config import get_settings
 from app.models.lead import BrainSettings, Lead, Message
+
+logger = logging.getLogger('garimpo.ai_sdr')
 
 
 @dataclass
@@ -123,6 +127,7 @@ class AiSdrService:
             return await self._call_gemini(
                 api_key=effective_key,
                 model=settings.gemini_model,
+                fallback_model=settings.gemini_fallback_model,
                 system_prompt=system_prompt,
                 history=history,
             )
@@ -186,6 +191,7 @@ class AiSdrService:
         *,
         api_key: str,
         model: str,
+        fallback_model: str,
         system_prompt: str,
         history: list[Message],
     ) -> AiDecision:
@@ -211,17 +217,58 @@ class AiSdrService:
         )
 
         contents = _build_gemini_contents(history)
+        candidate_models = [model]
+        if fallback_model and fallback_model != model:
+            candidate_models.append(fallback_model)
 
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=[genai_types.Tool(function_declarations=[handoff_declaration])],
-                temperature=0.4,
-                max_output_tokens=1024,
-            ),
-        )
+        response = None
+        used_model = model
+        last_error: Exception | None = None
+
+        for candidate in candidate_models:
+            for attempt in range(2):
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=candidate,
+                        contents=contents,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            tools=[genai_types.Tool(function_declarations=[handoff_declaration])],
+                            temperature=0.4,
+                            max_output_tokens=1024,
+                        ),
+                    )
+                    used_model = candidate
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    err_str = str(exc).upper()
+                    is_transient = any(
+                        token in err_str
+                        for token in ('503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED', 'OVERLOADED')
+                    )
+                    is_not_found = '404' in err_str or 'NOT_FOUND' in err_str
+                    if is_transient and attempt == 0:
+                        logger.warning(
+                            'Gemini %s retornou erro transitório (%s). Tentando novamente...',
+                            candidate,
+                            exc,
+                        )
+                        await asyncio.sleep(1.2)
+                        continue
+                    if is_transient or is_not_found:
+                        logger.warning(
+                            'Gemini %s indisponível (%s). Tentando modelo fallback...',
+                            candidate,
+                            exc,
+                        )
+                        break
+                    raise
+            if response is not None:
+                break
+
+        if response is None:
+            raise last_error or RuntimeError('Nenhum modelo Gemini respondeu.')
 
         if response.function_calls:
             for fn in response.function_calls:
@@ -237,7 +284,7 @@ class AiSdrService:
                         ),
                         reason=str(args.get('motivo', 'interesse_detectado')),
                         provider_used='gemini',
-                        model_used=model,
+                        model_used=used_model,
                     )
 
         return AiDecision(
@@ -245,7 +292,7 @@ class AiSdrService:
             reply_text=(response.text or '').strip()
             or 'Entendi! Posso te mostrar um exemplo prático para o seu segmento?',
             provider_used='gemini',
-            model_used=model,
+            model_used=used_model,
         )
 
     def _offline_heuristic(

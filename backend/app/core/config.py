@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     openai_model: str = 'gpt-4o-mini'
     gemini_api_key: str = ''
     gemini_model: str = 'gemini-3.8-flash'
+    gemini_fallback_model: str = 'gemini-3.1-flash-lite'
 
     # Alerts & Locale
     alert_whatsapp_phone: str = ''
