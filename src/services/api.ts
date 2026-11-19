@@ -43,6 +43,13 @@ async function request<T>(
     }
 
     return (await response.json()) as T;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(
+        'Tempo limite excedido ao aguardar resposta do servidor. Tente novamente.'
+      );
+    }
+    throw err;
   } finally {
     window.clearTimeout(timer);
   }
@@ -408,6 +415,6 @@ export const garimpoApi = {
         method: 'POST',
         body: JSON.stringify(payload),
       },
-      30000
+      45000
     ),
 };

@@ -195,7 +195,14 @@ class AiSdrService:
         system_prompt: str,
         history: list[Message],
     ) -> AiDecision:
-        client = genai.Client(api_key=api_key)
+        # Disable SDK's long internal retries so we can fail over fast to the fallback model
+        client = genai.Client(
+            api_key=api_key,
+            http_options=genai_types.HttpOptions(
+                timeout=12000,
+                retry_options=genai_types.HttpRetryOptions(attempts=1),
+            ),
+        )
 
         handoff_declaration = genai_types.FunctionDeclaration(
             name='transferir_para_humano',
@@ -228,37 +235,55 @@ class AiSdrService:
         for candidate in candidate_models:
             for attempt in range(2):
                 try:
-                    response = await client.aio.models.generate_content(
-                        model=candidate,
-                        contents=contents,
-                        config=genai_types.GenerateContentConfig(
-                            system_instruction=system_prompt,
-                            tools=[genai_types.Tool(function_declarations=[handoff_declaration])],
-                            temperature=0.4,
-                            max_output_tokens=1024,
+                    response = await asyncio.wait_for(
+                        client.aio.models.generate_content(
+                            model=candidate,
+                            contents=contents,
+                            config=genai_types.GenerateContentConfig(
+                                system_instruction=system_prompt,
+                                tools=[
+                                    genai_types.Tool(
+                                        function_declarations=[handoff_declaration]
+                                    )
+                                ],
+                                temperature=0.4,
+                                max_output_tokens=512,
+                                thinking_config=genai_types.ThinkingConfig(
+                                    thinking_level=genai_types.ThinkingLevel.MINIMAL
+                                ),
+                            ),
                         ),
+                        timeout=12.0,
                     )
                     used_model = candidate
                     break
                 except Exception as exc:
                     last_error = exc
                     err_str = str(exc).upper()
-                    is_transient = any(
+                    is_timeout = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+                    is_transient = is_timeout or any(
                         token in err_str
-                        for token in ('503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED', 'OVERLOADED')
+                        for token in (
+                            '503',
+                            'UNAVAILABLE',
+                            '429',
+                            'RESOURCE_EXHAUSTED',
+                            'OVERLOADED',
+                            'DEADLINE_EXCEEDED',
+                        )
                     )
                     is_not_found = '404' in err_str or 'NOT_FOUND' in err_str
-                    if is_transient and attempt == 0:
+                    if is_transient and not is_timeout and attempt == 0:
                         logger.warning(
                             'Gemini %s retornou erro transitório (%s). Tentando novamente...',
                             candidate,
                             exc,
                         )
-                        await asyncio.sleep(1.2)
+                        await asyncio.sleep(0.8)
                         continue
                     if is_transient or is_not_found:
                         logger.warning(
-                            'Gemini %s indisponível (%s). Tentando modelo fallback...',
+                            'Gemini %s lento/indisponível (%s). Trocando para fallback...',
                             candidate,
                             exc,
                         )

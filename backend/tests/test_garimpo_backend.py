@@ -326,7 +326,7 @@ async def test_gemini_fallback_on_503(monkeypatch):
             return SimpleNamespace(function_calls=None, text='Resposta pelo fallback!')
 
     class FakeClient:
-        def __init__(self, api_key: str):
+        def __init__(self, api_key: str, **kwargs):
             self.aio = SimpleNamespace(models=FakeModels())
 
     async def fast_sleep(_sec: float):
