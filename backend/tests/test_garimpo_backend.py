@@ -239,3 +239,19 @@ async def test_redis_concurrency_lock(test_env):
     token3 = await redis_service.acquire_lead_lock('lead-xyz', ttl_seconds=10)
     assert token3 is not None
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_send_test_alert_endpoint(test_env):
+    app = test_env['app']
+    evolution_mock = test_env['evolution_mock']
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        r = await client.post(
+            '/api/v1/whatsapp/test-alert',
+            json={'phone': '5573988323477'},
+        )
+        assert r.status_code == 200
+        assert r.json() == {'sent': True, 'phone': '5573988323477'}
+        evolution_mock.send_text_message.assert_awaited()

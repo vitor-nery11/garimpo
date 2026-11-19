@@ -68,6 +68,7 @@ interface GarimpoContextValue {
   toggleWhatsappConnection: (connected: boolean) => void;
   requestWhatsappQrCode: () => Promise<void>;
   refreshWhatsappStatus: () => Promise<void>;
+  sendTestAlert: (phone: string) => Promise<void>;
   // Toasts
   toasts: ToastNotification[];
   pushToast: (title: string, description?: string, type?: ToastNotification['type']) => void;
@@ -364,13 +365,27 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   // Real-time 5s polling when connected to FastAPI backend
   useEffect(() => {
     if (backendMode !== 'api') return;
+    let consecutiveFailures = 0;
+
     const interval = window.setInterval(() => {
-      void syncFromApi(false).catch(() => {
-        // Keep current mode on transient hiccup; user can manually retry if needed
-      });
+      void syncFromApi(false)
+        .then(() => {
+          consecutiveFailures = 0;
+        })
+        .catch(() => {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 3) {
+            setBackendMode('demo');
+            pushToast(
+              'Conexão com a API interrompida',
+              'O backend parou ou está reiniciando. Clique em "Reconectar" quando voltar.',
+              'warning'
+            );
+          }
+        });
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [backendMode, syncFromApi]);
+  }, [backendMode, syncFromApi, pushToast]);
 
   const isWithinBusinessHours = useMemo(() => {
     if (backendMode === 'api' && apiWithinHours !== null) {
@@ -873,6 +888,38 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     return Math.round((dailyStats.repliesReceivedToday / dailyStats.messagesSentToday) * 100);
   }, [dailyStats]);
 
+  const sendTestAlert = useCallback(
+    async (phone: string) => {
+      const target = phone.trim();
+      if (!target) {
+        pushToast('Informe um número', 'Preencha o Telefone de Alerta antes de testar.', 'warning');
+        return;
+      }
+
+      if (backendMode !== 'api') {
+        pushToast(
+          'Backend desconectado (Modo Demo)',
+          'Suba a API e clique em "Reconectar" para disparar mensagens reais no WhatsApp.',
+          'warning'
+        );
+        return;
+      }
+
+      try {
+        const res = await garimpoApi.sendTestAlert(target);
+        pushToast(
+          'Alerta de teste enviado!',
+          `Mensagem enviada no WhatsApp para +${res.phone}.`,
+          'success'
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Falha ao enviar alerta de teste.';
+        pushToast('Não foi possível enviar o teste', msg, 'warning');
+      }
+    },
+    [backendMode, pushToast]
+  );
+
   const value: GarimpoContextValue = {
     backendMode,
     retryApiConnection: () => bootstrapApi(true),
@@ -903,6 +950,7 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     toggleWhatsappConnection,
     requestWhatsappQrCode,
     refreshWhatsappStatus,
+    sendTestAlert,
     toasts,
     pushToast,
     dismissToast,

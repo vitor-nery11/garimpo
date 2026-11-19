@@ -24,10 +24,27 @@ class EvolutionService:
                 if resp.status_code == 200:
                     data = resp.json()
                     state = data.get('instance', {}).get('state', 'close')
+                    phone: str | None = None
+                    if state == 'open':
+                        try:
+                            info_resp = await client.get(
+                                f'{self.base_url}/instance/fetchInstances',
+                                headers=self._headers(),
+                                params={'instanceName': self.instance},
+                            )
+                            if info_resp.status_code == 200:
+                                items = info_resp.json()
+                                if isinstance(items, list) and items:
+                                    owner_jid = str(items[0].get('ownerJid') or '')
+                                    if '@' in owner_jid:
+                                        phone = owner_jid.split('@')[0]
+                        except Exception:
+                            pass
                     return WhatsAppStatusOut(
                         connected=(state == 'open'),
                         state=state,
                         instance_name=self.instance,
+                        phone=phone,
                     )
                 if resp.status_code == 404:
                     return WhatsAppStatusOut(

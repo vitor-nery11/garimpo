@@ -36,3 +36,7 @@ class WhatsAppStatusOut(BaseModel):
     instance_name: str
     phone: str | None = None
     qr_code_base64: str | None = None
+
+
+class TestAlertRequest(BaseModel):
+    phone: str = Field(..., min_length=8, max_length=32)

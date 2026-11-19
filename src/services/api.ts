@@ -31,8 +31,15 @@ async function request<T>(
     });
 
     if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `Erro HTTP ${response.status}`);
+      const rawText = await response.text();
+      let message = rawText || `Erro HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(rawText) as { detail?: string };
+        if (parsed.detail) message = parsed.detail;
+      } catch {
+        // Keep rawText
+      }
+      throw new Error(message);
     }
 
     return (await response.json()) as T;
@@ -369,4 +376,10 @@ export const garimpoApi = {
 
   logoutWhatsApp: () =>
     request<{ logged_out: boolean }>('/whatsapp/logout', { method: 'POST' }),
+
+  sendTestAlert: (phone: string) =>
+    request<{ sent: boolean; phone: string }>('/whatsapp/test-alert', {
+      method: 'POST',
+      body: JSON.stringify({ phone }),
+    }),
 };

@@ -74,11 +74,12 @@ export function ConnectionsPage() {
     toggleWhatsappConnection,
     requestWhatsappQrCode,
     refreshWhatsappStatus,
-    pushToast,
+    sendTestAlert,
   } = useGarimpo();
 
   const [form, setForm] = useState<ConnectionConfig>(connectionConfig);
   const [isDirty, setIsDirty] = useState(false);
+  const [isTestingAlert, setIsTestingAlert] = useState(false);
   const [showSearchKey, setShowSearchKey] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
   const [qrSeed, setQrSeed] = useState(1);
@@ -110,12 +111,13 @@ export function ConnectionsPage() {
     });
   };
 
-  const handleTestAlert = () => {
-    pushToast(
-      'Alerta de teste disparado',
-      `Notificação simulada enviada para ${form.alertPhone || 'seu WhatsApp'}.`,
-      'info'
-    );
+  const handleTestAlert = async () => {
+    setIsTestingAlert(true);
+    try {
+      await sendTestAlert(form.alertPhone);
+    } finally {
+      setIsTestingAlert(false);
+    }
   };
 
   return (
@@ -321,10 +323,11 @@ export function ConnectionsPage() {
               />
               <button
                 type="button"
-                onClick={handleTestAlert}
-                className="px-4 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-semibold transition cursor-pointer shrink-0"
+                disabled={isTestingAlert}
+                onClick={() => void handleTestAlert()}
+                className="px-4 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-60 text-amber-300 border border-amber-500/30 text-xs font-semibold transition cursor-pointer shrink-0"
               >
-                Enviar Alerta de Teste
+                {isTestingAlert ? 'Enviando teste...' : 'Enviar Alerta de Teste'}
               </button>
             </div>
           </div>

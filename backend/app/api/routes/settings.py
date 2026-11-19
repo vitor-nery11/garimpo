@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_evolution_service
@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.schemas.settings import (
     BrainConfigSchema,
     ConnectionConfigSchema,
+    TestAlertRequest,
     WhatsAppStatusOut,
 )
 from app.services.defaults import (
@@ -13,6 +14,7 @@ from app.services.defaults import (
     get_or_create_connection_settings,
 )
 from app.services.evolution_service import EvolutionService
+from app.services.prospecting_service import normalize_brazil_phone
 
 router = APIRouter(tags=['Configurações & Conexões'])
 
@@ -103,3 +105,39 @@ async def logout_whatsapp(
 ) -> dict[str, bool]:
     ok = await evolution_service.logout_instance()
     return {'logged_out': ok}
+
+
+@router.post('/whatsapp/test-alert', response_model=dict[str, str | bool])
+async def send_test_alert(
+    payload: TestAlertRequest,
+    evolution_service: EvolutionService = Depends(get_evolution_service),
+) -> dict[str, str | bool]:
+    clean_phone = normalize_brazil_phone(payload.phone)
+    if len(clean_phone) < 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Número inválido. Informe com DDI + DDD (ex: 5573988323477).',
+        )
+
+    wa_status = await evolution_service.get_connection_state()
+    if not wa_status.connected:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='WhatsApp de prospecção não está conectado. Pareie via QR Code primeiro.',
+        )
+
+    sent = await evolution_service.send_text_message(
+        clean_phone,
+        (
+            '✅ *Teste de Alerta — Garimpo*\n\n'
+            'Seu número pessoal está configurado para receber avisos em tempo real '
+            'sempre que um lead ficar quente!'
+        ),
+    )
+    if not sent:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail='Evolution API não confirmou o envio da mensagem de teste.',
+        )
+
+    return {'sent': True, 'phone': clean_phone}
