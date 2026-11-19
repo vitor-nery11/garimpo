@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from urllib.parse import quote_plus, urlparse
@@ -63,7 +64,6 @@ def normalize_brazil_phone(raw_phone: str | None) -> str:
 def _extract_neighborhood_from_address(address: str) -> str:
     if not address:
         return ''
-    # Typical Brazilian Google Maps address: "Rua X, 123 - Moema, São Paulo - SP, 04000-000"
     if ' - ' in address and ',' in address:
         after_dash = address.split(' - ', 1)[1]
         return after_dash.split(',', 1)[0].strip()
@@ -127,8 +127,7 @@ class ProspectingService:
 
         query = quote_plus(f'{niche} em {city}')
         maps_url = f'https://www.google.com/maps/search/{query}?hl=pt-BR'
-        candidates: list[ProspectingCandidateOut] = []
-        seen_phones: set[str] = set()
+        target_urls_count = min(max(limit + 4, int(limit * 1.5)), 45)
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -139,12 +138,20 @@ class ProspectingService:
                 locale='pt-BR',
                 viewport={'width': 1280, 'height': 900},
             )
+
+            # Block heavy images, fonts, and media to speed up Google Maps scraping
+            async def _block_heavy_resources(route):
+                if route.request.resource_type in ('image', 'media', 'font'):
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await context.route('**/*', _block_heavy_resources)
             page = await context.new_page()
 
             try:
                 await page.goto(maps_url, wait_until='domcontentloaded', timeout=30000)
 
-                # Dismiss Google consent banner if displayed
                 for btn_text in ('Aceitar tudo', 'Accept all'):
                     btn = page.locator(f'button:has-text("{btn_text}")').first
                     if await btn.count() > 0 and await btn.is_visible():
@@ -158,12 +165,11 @@ class ProspectingService:
                     logger.warning('Feed de resultados do Google Maps não carregou para: %s', query)
                     return []
 
-                # Scroll results list until we collect enough place links or reach end
                 place_urls: list[str] = []
                 seen_urls: set[str] = set()
                 stagnant_scrolls = 0
 
-                while len(place_urls) < limit and stagnant_scrolls < 5:
+                while len(place_urls) < target_urls_count and stagnant_scrolls < 5:
                     anchors = await page.locator('a.hfpxzc').all()
                     before_count = len(place_urls)
                     for anchor in anchors:
@@ -171,63 +177,75 @@ class ProspectingService:
                         if href and '/maps/place/' in href and href not in seen_urls:
                             seen_urls.add(href)
                             place_urls.append(href)
-                            if len(place_urls) >= limit:
+                            if len(place_urls) >= target_urls_count:
                                 break
 
-                    if len(place_urls) >= limit:
+                    if len(place_urls) >= target_urls_count:
                         break
 
-                    stagnant_scrolls = stagnant_scrolls + 1 if len(place_urls) == before_count else 0
+                    stagnant_scrolls = (
+                        stagnant_scrolls + 1 if len(place_urls) == before_count else 0
+                    )
                     await feed.evaluate('(el) => el.scrollBy(0, el.scrollHeight)')
-                    await page.wait_for_timeout(1200)
+                    await page.wait_for_timeout(900)
 
-                # Visit each collected place page to extract phone, website, and rating
-                for idx, place_url in enumerate(place_urls[:limit]):
-                    try:
-                        await page.goto(place_url, wait_until='domcontentloaded', timeout=20000)
-                        title_el = page.locator('h1.DUwDvf').first
-                        await title_el.wait_for(state='visible', timeout=8000)
-                        company_name = (await title_el.inner_text()).strip()
+                await page.close()
 
-                        phone_raw = ''
-                        phone_btn = page.locator('button[data-item-id^="phone:tel:"]').first
-                        if await phone_btn.count() > 0:
-                            data_id = await phone_btn.get_attribute('data-item-id') or ''
-                            phone_raw = data_id.replace('phone:tel:', '') or (
-                                await phone_btn.inner_text()
+                # Scrape place details concurrently with up to 4 tabs
+                semaphore = asyncio.Semaphore(4)
+
+                async def _scrape_one(idx: int, place_url: str) -> ProspectingCandidateOut | None:
+                    async with semaphore:
+                        detail_page = await context.new_page()
+                        try:
+                            await detail_page.goto(
+                                place_url, wait_until='domcontentloaded', timeout=18000
                             )
+                            title_el = detail_page.locator('h1.DUwDvf').first
+                            await title_el.wait_for(state='visible', timeout=7000)
+                            company_name = (await title_el.inner_text()).strip()
 
-                        phone = normalize_brazil_phone(phone_raw)
-                        if not phone or phone in seen_phones:
-                            continue
-                        seen_phones.add(phone)
+                            phone_raw = ''
+                            phone_btn = detail_page.locator(
+                                'button[data-item-id^="phone:tel:"]'
+                            ).first
+                            if await phone_btn.count() > 0:
+                                data_id = await phone_btn.get_attribute('data-item-id') or ''
+                                phone_raw = data_id.replace('phone:tel:', '') or (
+                                    await phone_btn.inner_text()
+                                )
 
-                        website_href: str | None = None
-                        web_link = page.locator('a[data-item-id="authority"]').first
-                        if await web_link.count() > 0:
-                            website_href = await web_link.get_attribute('href')
+                            phone = normalize_brazil_phone(phone_raw)
+                            if not phone:
+                                return None
 
-                        address_text = ''
-                        addr_btn = page.locator('button[data-item-id="address"]').first
-                        if await addr_btn.count() > 0:
-                            address_text = (await addr_btn.inner_text()).strip()
+                            website_href: str | None = None
+                            web_link = detail_page.locator('a[data-item-id="authority"]').first
+                            if await web_link.count() > 0:
+                                website_href = await web_link.get_attribute('href')
 
-                        rating: float | None = None
-                        reviews_count: int | None = None
-                        rating_box = page.locator('div.F7nice').first
-                        if await rating_box.count() > 0:
-                            rating_text = (await rating_box.inner_text()).strip()
-                            match_rating = re.search(r'(\d+[.,]\d+)', rating_text)
-                            if match_rating:
-                                rating = float(match_rating.group(1).replace(',', '.'))
-                            match_reviews = re.search(r'\((\d[\d\.]*)\)', rating_text)
-                            if match_reviews:
-                                reviews_count = int(match_reviews.group(1).replace('.', ''))
+                            address_text = ''
+                            addr_btn = detail_page.locator('button[data-item-id="address"]').first
+                            if await addr_btn.count() > 0:
+                                address_text = (await addr_btn.inner_text()).strip()
 
-                        diagnostic, website_url, ig_handle = classify_website(website_href)
+                            rating: float | None = None
+                            reviews_count: int | None = None
+                            rating_box = detail_page.locator('div.F7nice').first
+                            if await rating_box.count() > 0:
+                                rating_text = (await rating_box.inner_text()).strip()
+                                match_rating = re.search(r'(\d+[.,]\d+)', rating_text)
+                                if match_rating:
+                                    rating = float(match_rating.group(1).replace(',', '.'))
+                                match_reviews = re.search(r'\((\d[\d\.]*)\)', rating_text)
+                                if match_reviews:
+                                    reviews_count = int(
+                                        match_reviews.group(1).replace('.', '')
+                                    )
 
-                        candidates.append(
-                            ProspectingCandidateOut(
+                            diagnostic, website_url, ig_handle = classify_website(website_href)
+
+                            return ProspectingCandidateOut(
                                 id=f'pw-{idx + 1}-{phone[-4:]}',
                                 company_name=company_name,
                                 niche=niche,
@@ -242,15 +260,30 @@ class ProspectingService:
                                 has_whatsapp=True,
                                 already_queued=phone in existing_phones,
                             )
-                        )
-                    except Exception as exc:
-                        logger.debug('Erro ao ler card %s: %s', place_url, exc)
+                        except Exception as exc:
+                            logger.debug('Erro ao ler card %s: %s', place_url, exc)
+                            return None
+                        finally:
+                            await detail_page.close()
+
+                scraped = await asyncio.gather(
+                    *[_scrape_one(idx, u) for idx, u in enumerate(place_urls)]
+                )
+
+                candidates: list[ProspectingCandidateOut] = []
+                seen_phones: set[str] = set()
+                for item in scraped:
+                    if item is None or item.phone in seen_phones:
                         continue
+                    seen_phones.add(item.phone)
+                    candidates.append(item)
+                    if len(candidates) >= limit:
+                        break
+
+                return candidates
             finally:
                 await context.close()
                 await browser.close()
-
-        return candidates
 
     async def _search_google_places(
         self,

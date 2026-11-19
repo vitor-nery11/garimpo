@@ -362,9 +362,15 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
     void bootstrapApi(false);
   }, [bootstrapApi]);
 
-  // Real-time 5s polling when connected to FastAPI backend
+  // Real-time 5s polling when connected, or 6s auto-reconnect probe when in demo mode
   useEffect(() => {
-    if (backendMode !== 'api') return;
+    if (backendMode !== 'api') {
+      const probe = window.setInterval(() => {
+        void bootstrapApi(false);
+      }, 6000);
+      return () => window.clearInterval(probe);
+    }
+
     let consecutiveFailures = 0;
 
     const interval = window.setInterval(() => {
@@ -378,14 +384,14 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
             setBackendMode('demo');
             pushToast(
               'Conexão com a API interrompida',
-              'O backend parou ou está reiniciando. Clique em "Reconectar" quando voltar.',
+              'Tentando reconectar automaticamente em segundo plano...',
               'warning'
             );
           }
         });
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [backendMode, syncFromApi, pushToast]);
+  }, [backendMode, syncFromApi, bootstrapApi, pushToast]);
 
   const isWithinBusinessHours = useMemo(() => {
     if (backendMode === 'api' && apiWithinHours !== null) {
@@ -466,10 +472,22 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
   const runProspectingSearch = useCallback(
     (city: string, niche: string, limit: number) => {
       setIsSearching(true);
-      if (backendMode === 'api') {
-        void garimpoApi
-          .searchProspects(city, niche, limit)
-          .then((results) => {
+
+      const executeSearch = async () => {
+        let useApi = backendMode === 'api';
+        if (!useApi) {
+          try {
+            await garimpoApi.health();
+            setBackendMode('api');
+            useApi = true;
+          } catch {
+            useApi = false;
+          }
+        }
+
+        if (useApi) {
+          try {
+            const results = await garimpoApi.searchProspects(city, niche, limit);
             setSearchResults(results);
             const eligibleCount = results.filter((r) => r.diagnostic !== 'possui_site').length;
             setDailyStats((prev) => ({
@@ -481,29 +499,34 @@ export function GarimpoProvider({ children }: { children: ReactNode }) {
               `${eligibleCount} elegíveis (sem site ou apenas Instagram/Linktree).`,
               'info'
             );
-          })
-          .catch(() => {
-            pushToast('Erro na busca', 'Falha ao consultar o endpoint de prospecção.', 'warning');
-          })
-          .finally(() => setIsSearching(false));
-        return;
-      }
+          } catch (err) {
+            const detail =
+              err instanceof Error ? err.message : 'Falha ao consultar o endpoint de prospecção.';
+            pushToast('Erro na busca', detail, 'warning');
+          } finally {
+            setIsSearching(false);
+          }
+          return;
+        }
 
-      window.setTimeout(() => {
-        const results = generateDynamicCandidates(city, niche, limit, leads);
-        setSearchResults(results);
-        setIsSearching(false);
-        const eligibleCount = results.filter((r) => r.diagnostic !== 'possui_site').length;
-        setDailyStats((prev) => ({
-          ...prev,
-          leadsExtractedToday: prev.leadsExtractedToday + results.length,
-        }));
-        pushToast(
-          `${results.length} empresas encontradas`,
-          `${eligibleCount} elegíveis (sem site ou apenas Instagram/Linktree).`,
-          'info'
-        );
-      }, 650);
+        window.setTimeout(() => {
+          const results = generateDynamicCandidates(city, niche, limit, leads);
+          setSearchResults(results);
+          setIsSearching(false);
+          const eligibleCount = results.filter((r) => r.diagnostic !== 'possui_site').length;
+          setDailyStats((prev) => ({
+            ...prev,
+            leadsExtractedToday: prev.leadsExtractedToday + results.length,
+          }));
+          pushToast(
+            `${results.length} empresas encontradas (Modo Demo)`,
+            `${eligibleCount} elegíveis (sem site ou apenas Instagram/Linktree).`,
+            'info'
+          );
+        }, 650);
+      };
+
+      void executeSearch();
     },
     [backendMode, leads, pushToast]
   );

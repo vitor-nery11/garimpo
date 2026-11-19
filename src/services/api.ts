@@ -286,7 +286,7 @@ export const garimpoApi = {
         method: 'POST',
         body: JSON.stringify({ city, niche, limit }),
       },
-      20000
+      120000
     );
     return res.map(mapApiCandidate);
   },
